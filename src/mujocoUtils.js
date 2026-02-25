@@ -7,6 +7,12 @@ export async function reloadFunc() {
   this.scene.remove(this.scene.getObjectByName("MuJoCo Root"));
   [this.model, this.data, this.bodies, this.lights] =
     await loadSceneFromURL(this.mujoco, this.params.scene, this);
+  if (typeof this.configurePongbotPDChannels === "function") {
+    this.configurePongbotPDChannels();
+  }
+  if (typeof this.startPongbotPDControl === "function") {
+    this.startPongbotPDControl();
+  }
   this.mujoco.mj_forward(this.model, this.data);
   for (let i = 0; i < this.updateGUICallbacks.length; i++) {
     this.updateGUICallbacks[i](this.model, this.data, this.params);
@@ -30,7 +36,8 @@ export function setupGUI(parentContext) {
     "Humanoid": "humanoid.xml", "Cassie": "agility_cassie/scene.xml",
     "Hammock": "hammock.xml", "Balloons": "balloons.xml", "Hand": "shadow_hand/scene_right.xml",
     "Mug": "mug.xml", "Tendon": "model_with_tendon.xml",
-    "Torture Model": "model.xml", "Flex": "flex.xml", "Car": "car.xml", 
+    "Torture Model": "model.xml", "Flex": "flex.xml", "Car": "car.xml",
+    "Pongbot R2": "pongbot_r2/Pongbot_R2_no_link_ver2.xml",
   }).name('Example Scene').onChange(reload);
 
   // Add a help menu.
@@ -186,6 +193,11 @@ export function setupGUI(parentContext) {
     if (event.code === 'Backspace') { resetSimulation(); event.preventDefault(); }});
   actionInnerHTML += 'Reset simulation<br>';
   keyInnerHTML += 'Backspace<br>';
+
+  // Trigger 2-second PD control for Pongbot joints.
+  simulationFolder
+    .add({ homePos: () => { parentContext.startPongbotPDControl(); } }, 'homePos')
+    .name('home pos');
 
   // Add keyframe slider.
   let nkeys = parentContext.model.nkey;
@@ -669,6 +681,24 @@ export async function downloadExampleScenesFolder(mujoco) {
     "mug.obj",
     "mug.png",
     "mug.xml",
+    "pongbot_r2/BODY.STL",
+    "pongbot_r2/FL_CALF.STL",
+    "pongbot_r2/FL_HIP.STL",
+    "pongbot_r2/FL_THIGH.STL",
+    "pongbot_r2/FL_TIP.STL",
+    "pongbot_r2/FR_CALF.STL",
+    "pongbot_r2/FR_HIP.STL",
+    "pongbot_r2/FR_THIGH.STL",
+    "pongbot_r2/FR_TIP.STL",
+    "pongbot_r2/Pongbot_R2_no_link_ver2.xml",
+    "pongbot_r2/RL_CALF.STL",
+    "pongbot_r2/RL_HIP.STL",
+    "pongbot_r2/RL_THIGH.STL",
+    "pongbot_r2/RL_TIP.STL",
+    "pongbot_r2/RR_CALF.STL",
+    "pongbot_r2/RR_HIP.STL",
+    "pongbot_r2/RR_THIGH.STL",
+    "pongbot_r2/RR_TIP.STL",
     "scene.xml",
     "shadow_hand/assets/f_distal_pst.obj",
     "shadow_hand/assets/f_knuckle.obj",
@@ -704,7 +734,8 @@ export async function downloadExampleScenesFolder(mujoco) {
           working += "/";
       }
 
-      if (allFiles[i].endsWith(".png") || allFiles[i].endsWith(".stl") || allFiles[i].endsWith(".skn")) {
+      const lower = allFiles[i].toLowerCase();
+      if (lower.endsWith(".png") || lower.endsWith(".stl") || lower.endsWith(".skn")) {
           mujoco.FS.writeFile("/working/" + allFiles[i], new Uint8Array(await responses[i].arrayBuffer()));
       } else {
           mujoco.FS.writeFile("/working/" + allFiles[i], await responses[i].text());
@@ -758,4 +789,3 @@ export function toMujocoPos(target) { return target.set(target.x, -target.z, tar
 export function standardNormal() {
   return Math.sqrt(-2.0 * Math.log( Math.random())) *
          Math.cos ( 2.0 * Math.PI * Math.random()); }
-

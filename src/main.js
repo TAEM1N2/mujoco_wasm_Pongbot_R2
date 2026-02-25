@@ -10,17 +10,18 @@ import   load_mujoco        from '../node_modules/mujoco-js/dist/mujoco_wasm.js'
 const mujoco = await load_mujoco();
 
 // Set up Emscripten's Virtual File System
-var initialScene = "humanoid.xml";
+var bootstrapScene = "simple.xml";
+var initialScene = "pongbot_r2/Pongbot_R2_no_link_ver2.xml";
 mujoco.FS.mkdir('/working');
 mujoco.FS.mount(mujoco.MEMFS, { root: '.' }, '/working');
-mujoco.FS.writeFile("/working/" + initialScene, await(await fetch("./assets/scenes/" + initialScene)).text());
+mujoco.FS.writeFile("/working/" + bootstrapScene, await(await fetch("./assets/scenes/" + bootstrapScene)).text());
 
 export class MuJoCoDemo {
   constructor() {
     this.mujoco = mujoco;
 
     // Load in the state from XML
-    this.model = mujoco.MjModel.loadFromXML("/working/" + initialScene);
+    this.model = mujoco.MjModel.loadFromXML("/working/" + bootstrapScene);
     this.data  = new mujoco.MjData(this.model);
 
     // Define Random State Variables
@@ -30,6 +31,16 @@ export class MuJoCoDemo {
     this.tmpVec  = new THREE.Vector3();
     this.tmpQuat = new THREE.Quaternion();
     this.updateGUICallbacks = [];
+    this.pongbotPD = {
+      active: false,
+      startTime: 0.0,
+      duration: 2.0,
+      kp: 500.0,
+      kd: 1.5,
+      // KP_joint in request is interpreted as KN_JOINT in this model.
+      targets: { HR: 0.0, HP: 0.8, KN: -1.5 },
+      channels: [],
+    };
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
@@ -104,9 +115,91 @@ export class MuJoCoDemo {
     // Initialize the three.js Scene using the .xml Model in initialScene
     [this.model, this.data, this.bodies, this.lights] =
       await loadSceneFromURL(mujoco, initialScene, this);
+    this.configurePongbotPDChannels();
+    this.startPongbotPDControl();
 
     this.gui = new GUI();
     setupGUI(this);
+  }
+
+  startPongbotPDControl() {
+    if (!this.pongbotPD.channels.length) {
+      console.warn("Pongbot PD channels were not found in current scene.");
+      return;
+    }
+    this.pongbotPD.active = true;
+    this.pongbotPD.startTime = this.data.time;
+    for (let i = 0; i < this.pongbotPD.channels.length; i++) {
+      const ch = this.pongbotPD.channels[i];
+      ch.startQ = this.data.qpos[ch.qposAdr];
+    }
+  }
+
+  configurePongbotPDChannels() {
+    const textDecoder = new TextDecoder("utf-8");
+    const nullChar = textDecoder.decode(new ArrayBuffer(1));
+    const getNameAt = (adr) => textDecoder.decode(this.model.names.subarray(adr)).split(nullChar)[0];
+
+    const findJointIDByName = (name) => {
+      for (let i = 0; i < this.model.njnt; i++) {
+        if (getNameAt(this.model.name_jntadr[i]) === name) { return i; }
+      }
+      return -1;
+    };
+
+    const findActuatorIDByName = (name) => {
+      for (let i = 0; i < this.model.nu; i++) {
+        if (getNameAt(this.model.name_actuatoradr[i]) === name) { return i; }
+      }
+      return -1;
+    };
+
+    const legs = ["FL", "FR", "RL", "RR"];
+    const types = ["HR", "HP", "KN"];
+    this.pongbotPD.channels = [];
+
+    for (let l = 0; l < legs.length; l++) {
+      for (let t = 0; t < types.length; t++) {
+        const type = types[t];
+        const name = legs[l] + "_" + type + "_JOINT";
+        const jointID = findJointIDByName(name);
+        const actuatorID = findActuatorIDByName(name);
+        if (jointID < 0 || actuatorID < 0) { continue; }
+        this.pongbotPD.channels.push({
+          actuatorID: actuatorID,
+          actuatorName: name,
+          qposAdr: this.model.jnt_qposadr[jointID],
+          qvelAdr: this.model.jnt_dofadr[jointID],
+          target: this.pongbotPD.targets[type],
+          startQ: 0.0,
+        });
+      }
+    }
+  }
+
+  applyPongbotPDControl() {
+    if (!this.pongbotPD.active) { return; }
+
+    const ctrl = this.data.ctrl;
+    const qpos = this.data.qpos;
+    const qvel = this.data.qvel;
+    const actRange = this.model.actuator_ctrlrange;
+    const elapsed = this.data.time - this.pongbotPD.startTime;
+    const tau = Math.max(0.0, Math.min(1.0, elapsed / this.pongbotPD.duration));
+    const blend = 0.5 * (1.0 - Math.cos(Math.PI * tau));
+
+    for (let i = 0; i < this.pongbotPD.channels.length; i++) {
+      const ch = this.pongbotPD.channels[i];
+      const qRef = ch.startQ + (ch.target - ch.startQ) * blend;
+      const q = qpos[ch.qposAdr];
+      const qd = qvel[ch.qvelAdr];
+      let u = this.pongbotPD.kp * (qRef - q) - this.pongbotPD.kd * qd;
+      const uMin = actRange[2 * ch.actuatorID + 0];
+      const uMax = actRange[2 * ch.actuatorID + 1];
+      u = Math.max(uMin, Math.min(uMax, u));
+      ctrl[ch.actuatorID] = u;
+      this.params[ch.actuatorName] = u;
+    }
   }
 
   onWindowResize() {
@@ -133,6 +226,8 @@ export class MuJoCoDemo {
             this.params["Actuator " + i] = currentCtrl[i];
           }
         }
+
+        this.applyPongbotPDControl();
 
         // Clear old perturbations, apply new ones.
         for (let i = 0; i < this.data.qfrc_applied.length; i++) { this.data.qfrc_applied[i] = 0.0; }
