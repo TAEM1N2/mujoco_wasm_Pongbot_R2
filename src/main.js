@@ -6,8 +6,30 @@ import { DragStateManager } from './utils/DragStateManager.js';
 import { setupGUI, downloadExampleScenesFolder, loadSceneFromURL, drawTendonsAndFlex, getPosition, getQuaternion, toMujocoPos, standardNormal } from './mujocoUtils.js';
 import   load_mujoco        from '../node_modules/mujoco-js/dist/mujoco_wasm.js';
 
+function showStartupError(error) {
+  const pre = document.createElement('pre');
+  pre.style.position = 'fixed';
+  pre.style.left = '10px';
+  pre.style.top = '10px';
+  pre.style.right = '10px';
+  pre.style.padding = '12px';
+  pre.style.background = '#2a0000';
+  pre.style.color = '#ffd7d7';
+  pre.style.whiteSpace = 'pre-wrap';
+  pre.style.zIndex = '9999';
+  pre.textContent = "Startup error:\n" + (error && error.stack ? error.stack : String(error));
+  document.body.appendChild(pre);
+}
+
 // Load the MuJoCo Module
-const mujoco = await load_mujoco();
+let mujoco;
+try {
+  mujoco = await load_mujoco();
+} catch (error) {
+  console.error(error);
+  showStartupError(error);
+  throw error;
+}
 
 // Set up Emscripten's Virtual File System
 var bootstrapScene = "simple.xml";
@@ -80,7 +102,7 @@ export class MuJoCoDemo {
     this.renderer = new THREE.WebGLRenderer( { antialias: true } );
     this.renderer.setPixelRatio(1.0);////window.devicePixelRatio );
     this.renderer.setSize( window.innerWidth, window.innerHeight );
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = false;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // default THREE.PCFShadowMap
     THREE.ColorManagement.enabled = false;
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
@@ -103,7 +125,6 @@ export class MuJoCoDemo {
     this.controls.update();
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
-
     // Initialize the Drag State Manager.
     this.dragStateManager = new DragStateManager(this.scene, this.renderer, this.camera, this.container.parentElement, this.controls);
   }
@@ -190,7 +211,8 @@ export class MuJoCoDemo {
 
     for (let i = 0; i < this.pongbotPD.channels.length; i++) {
       const ch = this.pongbotPD.channels[i];
-      const qRef = ch.startQ + (ch.target - ch.startQ) * blend;
+      const qHome = ch.startQ + (ch.target - ch.startQ) * blend;
+      const qRef = qHome;
       const q = qpos[ch.qposAdr];
       const qd = qvel[ch.qvelAdr];
       let u = this.pongbotPD.kp * (qRef - q) - this.pongbotPD.kd * qd;
@@ -312,5 +334,11 @@ export class MuJoCoDemo {
   }
 }
 
-let demo = new MuJoCoDemo();
-await demo.init();
+try {
+  let demo = new MuJoCoDemo();
+  await demo.init();
+} catch (error) {
+  console.error(error);
+  showStartupError(error);
+  throw error;
+}

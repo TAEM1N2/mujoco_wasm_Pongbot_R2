@@ -33,10 +33,6 @@ export function setupGUI(parentContext) {
   // Add scene selection dropdown.
   let reload = reloadFunc.bind(parentContext);
   parentContext.gui.add(parentContext.params, 'scene', {
-    "Humanoid": "humanoid.xml", "Cassie": "agility_cassie/scene.xml",
-    "Hammock": "hammock.xml", "Balloons": "balloons.xml", "Hand": "shadow_hand/scene_right.xml",
-    "Mug": "mug.xml", "Tendon": "model_with_tendon.xml",
-    "Torture Model": "model.xml", "Flex": "flex.xml", "Car": "car.xml",
     "Pongbot R2": "pongbot_r2/Pongbot_R2_no_link_ver2.xml",
   }).name('Example Scene').onChange(reload);
 
@@ -194,11 +190,6 @@ export function setupGUI(parentContext) {
   actionInnerHTML += 'Reset simulation<br>';
   keyInnerHTML += 'Backspace<br>';
 
-  // Trigger 2-second PD control for Pongbot joints.
-  simulationFolder
-    .add({ homePos: () => { parentContext.startPongbotPDControl(); } }, 'homePos')
-    .name('home pos');
-
   // Add keyframe slider.
   let nkeys = parentContext.model.nkey;
   let keyframeGUI = simulationFolder.add(parentContext.params, "keyframeNumber", 0, nkeys - 1, 1).name('Load Keyframe').listen();
@@ -279,6 +270,8 @@ export function setupGUI(parentContext) {
  * @param {MuJoCoDemo} parent The three.js Scene Object to add the MuJoCo model elements to
  */
 export async function loadSceneFromURL(mujoco, filename, parent) {
+    const fastPongbotLoad = filename.includes("pongbot_r2/");
+
     // Free the old data.
     if (parent.data != null) {
       parent.data.delete();
@@ -387,55 +380,57 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
             normal_buffer[v + 2] = -temp;
           }
 
-          let uv_buffer = model.mesh_texcoord.subarray(
-             model.mesh_texcoordadr[meshID] * 2,
-            (model.mesh_texcoordadr[meshID]  + model.mesh_texcoordnum[meshID]) * 2);
-
           let face_to_vertex_buffer = model.mesh_face.subarray(
              model.mesh_faceadr[meshID] * 3,
             (model.mesh_faceadr[meshID]  + model.mesh_facenum[meshID]) * 3);
-          let face_to_uv_buffer = model.mesh_facetexcoord.subarray(
-             model.mesh_faceadr[meshID] * 3,
-            (model.mesh_faceadr[meshID]  + model.mesh_facenum[meshID]) * 3);
-          let face_to_normal_buffer = model.mesh_facenormal.subarray(
-             model.mesh_faceadr[meshID] * 3,
-            (model.mesh_faceadr[meshID]  + model.mesh_facenum[meshID]) * 3);
 
-          // The UV and Normal Buffers are actually indexed by the triangle indices through the face_to_uv_buffer and face_to_normal_buffer.
-          // We need to swizzle them into a per-vertex format for three.js
-          let swizzled_uv_buffer      = new Float32Array((vertex_buffer.length / 3) * 2);
-          let swizzled_normal_buffer  = new Float32Array(vertex_buffer.length);
-          for (let t = 0; t < face_to_vertex_buffer.length / 3; t++) {
-            let vi0 = face_to_vertex_buffer[(t * 3) + 0];
-            let vi1 = face_to_vertex_buffer[(t * 3) + 1];
-            let vi2 = face_to_vertex_buffer[(t * 3) + 2];
-            let uvi0 = face_to_uv_buffer[(t * 3) + 0];
-            let uvi1 = face_to_uv_buffer[(t * 3) + 1];
-            let uvi2 = face_to_uv_buffer[(t * 3) + 2];
-            let nvi0 = face_to_normal_buffer[(t * 3) + 0];
-            let nvi1 = face_to_normal_buffer[(t * 3) + 1];
-            let nvi2 = face_to_normal_buffer[(t * 3) + 2];
-            swizzled_uv_buffer[(vi0 * 2) + 0] = uv_buffer[(uvi0 * 2) + 0];
-            swizzled_uv_buffer[(vi0 * 2) + 1] = uv_buffer[(uvi0 * 2) + 1];
-            swizzled_uv_buffer[(vi1 * 2) + 0] = uv_buffer[(uvi1 * 2) + 0];
-            swizzled_uv_buffer[(vi1 * 2) + 1] = uv_buffer[(uvi1 * 2) + 1];
-            swizzled_uv_buffer[(vi2 * 2) + 0] = uv_buffer[(uvi2 * 2) + 0];
-            swizzled_uv_buffer[(vi2 * 2) + 1] = uv_buffer[(uvi2 * 2) + 1];
-            swizzled_normal_buffer[(vi0 * 3) + 0] = normal_buffer[(nvi0 * 3) + 0];
-            swizzled_normal_buffer[(vi0 * 3) + 1] = normal_buffer[(nvi0 * 3) + 1];
-            swizzled_normal_buffer[(vi0 * 3) + 2] = normal_buffer[(nvi0 * 3) + 2];
-            swizzled_normal_buffer[(vi1 * 3) + 0] = normal_buffer[(nvi1 * 3) + 0];
-            swizzled_normal_buffer[(vi1 * 3) + 1] = normal_buffer[(nvi1 * 3) + 1];
-            swizzled_normal_buffer[(vi1 * 3) + 2] = normal_buffer[(nvi1 * 3) + 2];
-            swizzled_normal_buffer[(vi2 * 3) + 0] = normal_buffer[(nvi2 * 3) + 0];
-            swizzled_normal_buffer[(vi2 * 3) + 1] = normal_buffer[(nvi2 * 3) + 1];
-            swizzled_normal_buffer[(vi2 * 3) + 2] = normal_buffer[(nvi2 * 3) + 2];
-          }
           geometry.setAttribute("position", new THREE.BufferAttribute(vertex_buffer, 3));
-          geometry.setAttribute("normal"  , new THREE.BufferAttribute(swizzled_normal_buffer, 3));
-          geometry.setAttribute("uv"      , new THREE.BufferAttribute(swizzled_uv_buffer, 2));
           geometry.setIndex    (Array.from(face_to_vertex_buffer));
-          geometry.computeVertexNormals(); // MuJoCo Normals acting strangely... just recompute them
+          if (fastPongbotLoad && normal_buffer.length === vertex_buffer.length) {
+            geometry.setAttribute("normal", new THREE.BufferAttribute(normal_buffer, 3));
+          } else {
+            let uv_buffer = model.mesh_texcoord.subarray(
+               model.mesh_texcoordadr[meshID] * 2,
+              (model.mesh_texcoordadr[meshID]  + model.mesh_texcoordnum[meshID]) * 2);
+            let face_to_uv_buffer = model.mesh_facetexcoord.subarray(
+               model.mesh_faceadr[meshID] * 3,
+              (model.mesh_faceadr[meshID]  + model.mesh_facenum[meshID]) * 3);
+            let face_to_normal_buffer = model.mesh_facenormal.subarray(
+               model.mesh_faceadr[meshID] * 3,
+              (model.mesh_faceadr[meshID]  + model.mesh_facenum[meshID]) * 3);
+
+            let swizzled_uv_buffer      = new Float32Array((vertex_buffer.length / 3) * 2);
+            let swizzled_normal_buffer  = new Float32Array(vertex_buffer.length);
+            for (let t = 0; t < face_to_vertex_buffer.length / 3; t++) {
+              let vi0 = face_to_vertex_buffer[(t * 3) + 0];
+              let vi1 = face_to_vertex_buffer[(t * 3) + 1];
+              let vi2 = face_to_vertex_buffer[(t * 3) + 2];
+              let uvi0 = face_to_uv_buffer[(t * 3) + 0];
+              let uvi1 = face_to_uv_buffer[(t * 3) + 1];
+              let uvi2 = face_to_uv_buffer[(t * 3) + 2];
+              let nvi0 = face_to_normal_buffer[(t * 3) + 0];
+              let nvi1 = face_to_normal_buffer[(t * 3) + 1];
+              let nvi2 = face_to_normal_buffer[(t * 3) + 2];
+              swizzled_uv_buffer[(vi0 * 2) + 0] = uv_buffer[(uvi0 * 2) + 0];
+              swizzled_uv_buffer[(vi0 * 2) + 1] = uv_buffer[(uvi0 * 2) + 1];
+              swizzled_uv_buffer[(vi1 * 2) + 0] = uv_buffer[(uvi1 * 2) + 0];
+              swizzled_uv_buffer[(vi1 * 2) + 1] = uv_buffer[(uvi1 * 2) + 1];
+              swizzled_uv_buffer[(vi2 * 2) + 0] = uv_buffer[(uvi2 * 2) + 0];
+              swizzled_uv_buffer[(vi2 * 2) + 1] = uv_buffer[(uvi2 * 2) + 1];
+              swizzled_normal_buffer[(vi0 * 3) + 0] = normal_buffer[(nvi0 * 3) + 0];
+              swizzled_normal_buffer[(vi0 * 3) + 1] = normal_buffer[(nvi0 * 3) + 1];
+              swizzled_normal_buffer[(vi0 * 3) + 2] = normal_buffer[(nvi0 * 3) + 2];
+              swizzled_normal_buffer[(vi1 * 3) + 0] = normal_buffer[(nvi1 * 3) + 0];
+              swizzled_normal_buffer[(vi1 * 3) + 1] = normal_buffer[(nvi1 * 3) + 1];
+              swizzled_normal_buffer[(vi1 * 3) + 2] = normal_buffer[(nvi1 * 3) + 2];
+              swizzled_normal_buffer[(vi2 * 3) + 0] = normal_buffer[(nvi2 * 3) + 0];
+              swizzled_normal_buffer[(vi2 * 3) + 1] = normal_buffer[(nvi2 * 3) + 1];
+              swizzled_normal_buffer[(vi2 * 3) + 2] = normal_buffer[(nvi2 * 3) + 2];
+            }
+            geometry.setAttribute("normal", new THREE.BufferAttribute(swizzled_normal_buffer, 3));
+            geometry.setAttribute("uv"    , new THREE.BufferAttribute(swizzled_uv_buffer, 2));
+            geometry.computeVertexNormals(); // fallback for non-pongbot assets
+          }
           meshes[meshID] = geometry;
         } else {
           geometry = meshes[meshID];
@@ -652,35 +647,7 @@ export function drawTendonsAndFlex(mujocoRoot, model, data) {
  * @param {mujoco} mujoco */
 export async function downloadExampleScenesFolder(mujoco) {
   let allFiles = [
-    "22_humanoids.xml",
-    "adhesion.xml",
-    "agility_cassie/assets/achilles-rod.obj",
-    "agility_cassie/assets/cassie-texture.png",
-    "agility_cassie/assets/foot-crank.obj",
-    "agility_cassie/assets/foot.obj",
-    "agility_cassie/assets/heel-spring.obj",
-    "agility_cassie/assets/hip-pitch.obj",
-    "agility_cassie/assets/hip-roll.obj",
-    "agility_cassie/assets/hip-yaw.obj",
-    "agility_cassie/assets/knee-spring.obj",
-    "agility_cassie/assets/knee.obj",
-    "agility_cassie/assets/pelvis.obj",
-    "agility_cassie/assets/plantar-rod.obj",
-    "agility_cassie/assets/shin.obj",
-    "agility_cassie/assets/tarsus.obj",
-    "agility_cassie/cassie.xml",
-    "agility_cassie/scene.xml",
-    "arm26.xml",
-    "balloons.xml",
-    "car.xml",
-    "flex.xml",
-    "hammock.xml",
-    "humanoid.xml",
-    "humanoid_body.xml",
-    "model.xml",
-    "mug.obj",
-    "mug.png",
-    "mug.xml",
+    // Keep only Pongbot R2 assets to avoid loading unused examples.
     "pongbot_r2/BODY.STL",
     "pongbot_r2/FL_CALF.STL",
     "pongbot_r2/FL_HIP.STL",
@@ -699,28 +666,6 @@ export async function downloadExampleScenesFolder(mujoco) {
     "pongbot_r2/RR_HIP.STL",
     "pongbot_r2/RR_THIGH.STL",
     "pongbot_r2/RR_TIP.STL",
-    "scene.xml",
-    "shadow_hand/assets/f_distal_pst.obj",
-    "shadow_hand/assets/f_knuckle.obj",
-    "shadow_hand/assets/f_middle.obj",
-    "shadow_hand/assets/f_proximal.obj",
-    "shadow_hand/assets/forearm_0.obj",
-    "shadow_hand/assets/forearm_1.obj",
-    "shadow_hand/assets/forearm_collision.obj",
-    "shadow_hand/assets/lf_metacarpal.obj",
-    "shadow_hand/assets/mounting_plate.obj",
-    "shadow_hand/assets/palm.obj",
-    "shadow_hand/assets/th_distal_pst.obj",
-    "shadow_hand/assets/th_middle.obj",
-    "shadow_hand/assets/th_proximal.obj",
-    "shadow_hand/assets/wrist.obj",
-    "shadow_hand/left_hand.xml",
-    "shadow_hand/right_hand.xml",
-    "shadow_hand/scene_left.xml",
-    "shadow_hand/scene_right.xml",
-    "simple.xml",
-    "slider_crank.xml",
-    "model_with_tendon.xml",
   ];
 
   let requests = allFiles.map((url) => fetch("./assets/scenes/" + url));
