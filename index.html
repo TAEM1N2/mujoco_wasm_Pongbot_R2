@@ -23,9 +23,27 @@
         <h1 hidden></h1> <!-- Puts the Lighthouse Score over 90 heheh-->
 
         <div id="appbody" style="position: absolute;">
-            <!--<div id="error"></div>
-            <script type="module" src="./src/Debug.js"></script>-->
-            <script type="module" src="./build/main.js"></script>
+            <script type="module">
+              const showFatal = (err) => {
+                const pre = document.createElement('pre');
+                pre.style.position = 'fixed';
+                pre.style.left = '10px';
+                pre.style.top = '10px';
+                pre.style.right = '10px';
+                pre.style.padding = '12px';
+                pre.style.background = '#2a0000';
+                pre.style.color = '#ffd7d7';
+                pre.style.whiteSpace = 'pre-wrap';
+                pre.style.zIndex = '9999';
+                pre.textContent = 'Index bootstrap error:\n' + (err && err.stack ? err.stack : String(err));
+                document.body.appendChild(pre);
+              };
+
+              window.addEventListener('error', (e) => showFatal(e.error || e.message));
+              window.addEventListener('unhandledrejection', (e) => showFatal(e.reason));
+
+              import('./build/main.js').catch(showFatal);
+            </script>
         </div>
     </body>
 </html>
