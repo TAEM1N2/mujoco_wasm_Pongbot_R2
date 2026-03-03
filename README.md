@@ -1,3 +1,5 @@
+https://taem1n2.github.io/mujoco_wasm_Pongbot_R2/
+
 <p align="center">
   <a href="https://zalo.github.io/mujoco_wasm/"><img src="./assets/MuJoCoWasmLogo.png" href></a>
 </p>
@@ -73,3 +75,4 @@ mujoco.mj_applyFT(model, data, [fx, fy, fz], [tx, ty, tz], [px, py, pz], bodyId,
 data.delete();
 model.delete();
 ```
+
