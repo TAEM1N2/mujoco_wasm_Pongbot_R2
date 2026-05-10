@@ -285,8 +285,8 @@ export class MuJoCoDemo {
     if (this.followBodyId < 0 || !this.data || !this.controls) { return; }
     const current = getPosition(this.data.xpos, this.followBodyId, new THREE.Vector3());
     if (this.params.terrainMode === "stair") {
-      this.controls.target.copy(current).add(new THREE.Vector3(5.2, 0.45, -2.2));
-      this.camera.position.copy(current).add(new THREE.Vector3(-2.8, 3.0, 4.8));
+      this.controls.target.copy(current).add(new THREE.Vector3(7.2, 0.55, -2.6));
+      this.camera.position.copy(current).add(new THREE.Vector3(-4.2, 3.8, 6.8));
     } else {
       this.controls.target.copy(current).add(new THREE.Vector3(0.0, 0.05, 0.0));
       this.camera.position.copy(current).add(new THREE.Vector3(2.0, 1.0, 1.7));

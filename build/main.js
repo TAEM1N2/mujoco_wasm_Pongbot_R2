@@ -39016,8 +39016,8 @@ var MuJoCoDemo = class {
     }
     const current = getPosition(this.data.xpos, this.followBodyId, new Vector3());
     if (this.params.terrainMode === "stair") {
-      this.controls.target.copy(current).add(new Vector3(5.2, 0.45, -2.2));
-      this.camera.position.copy(current).add(new Vector3(-2.8, 3, 4.8));
+      this.controls.target.copy(current).add(new Vector3(7.2, 0.55, -2.6));
+      this.camera.position.copy(current).add(new Vector3(-4.2, 3.8, 6.8));
     } else {
       this.controls.target.copy(current).add(new Vector3(0, 0.05, 0));
       this.camera.position.copy(current).add(new Vector3(2, 1, 1.7));
