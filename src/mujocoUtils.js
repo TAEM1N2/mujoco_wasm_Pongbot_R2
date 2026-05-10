@@ -1,17 +1,57 @@
 import * as THREE from 'three';
-import { Reflector  } from './utils/Reflector.js';
 import { MuJoCoDemo } from './main.js';
+
+function createGroundTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  const colors = ["#394b5c", "#46596a"];
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      ctx.fillStyle = colors[(x + y) % 2];
+      ctx.fillRect(x * 32, y * 32, 32, 32);
+    }
+  }
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.20)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 8; i++) {
+    ctx.beginPath();
+    ctx.moveTo(i * 32, 0);
+    ctx.lineTo(i * 32, 256);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i * 32);
+    ctx.lineTo(256, i * 32);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(255, 200, 87, 0.45)";
+  ctx.fillRect(122, 0, 12, 256);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(30, 30);
+  texture.needsUpdate = true;
+  return texture;
+}
 
 export async function reloadFunc() {
   // Delete the old scene and load the new scene
   this.scene.remove(this.scene.getObjectByName("MuJoCo Root"));
   [this.model, this.data, this.bodies, this.lights] =
     await loadSceneFromURL(this.mujoco, this.params.scene, this);
-  if (typeof this.configurePongbotPDChannels === "function") {
-    this.configurePongbotPDChannels();
+  if (typeof this.configureTerrainModes === "function") {
+    this.configureTerrainModes();
   }
-  if (typeof this.startPongbotPDControl === "function") {
-    this.startPongbotPDControl();
+  if (typeof this.applyTerrainMode === "function") {
+    this.applyTerrainMode();
+  }
+  if (typeof this.configureCameraFollow === "function") {
+    this.configureCameraFollow();
+  }
+  if (typeof this.startImplicitPolicyController === "function") {
+    await this.startImplicitPolicyController();
   }
   this.mujoco.mj_forward(this.model, this.data);
   for (let i = 0; i < this.updateGUICallbacks.length; i++) {
@@ -33,101 +73,8 @@ export function setupGUI(parentContext) {
   // Add scene selection dropdown.
   let reload = reloadFunc.bind(parentContext);
   parentContext.gui.add(parentContext.params, 'scene', {
-    "Pongbot R2": "pongbot_r2/Pongbot_R2_no_link_ver2.xml",
+    "Pongbot R2": "pongbot_r2/PONGBOT_R2_V2.xml",
   }).name('Example Scene').onChange(reload);
-
-  // Add a help menu.
-  // Parameters:
-  //  Name: "Help".
-  //  When pressed, a help menu is displayed in the top left corner. When pressed again
-  //  the help menu is removed.
-  //  Can also be triggered by pressing F1.
-  // Has a dark transparent background.
-  // Has two columns: one for putting the action description, and one for the action key trigger.keyframeNumber
-  let keyInnerHTML = '';
-  let actionInnerHTML = '';
-  const displayHelpMenu = () => {
-    if (parentContext.params.help) {
-      const helpMenu = document.createElement('div');
-      helpMenu.style.position = 'absolute';
-      helpMenu.style.top = '10px';
-      helpMenu.style.left = '10px';
-      helpMenu.style.color = 'white';
-      helpMenu.style.font = 'normal 18px Arial';
-      helpMenu.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-      helpMenu.style.padding = '10px';
-      helpMenu.style.borderRadius = '10px';
-      helpMenu.style.display = 'flex';
-      helpMenu.style.flexDirection = 'column';
-      helpMenu.style.alignItems = 'center';
-      helpMenu.style.justifyContent = 'center';
-      helpMenu.style.width = '400px';
-      helpMenu.style.height = '400px';
-      helpMenu.style.overflow = 'auto';
-      helpMenu.style.zIndex = '1000';
-
-      const helpMenuTitle = document.createElement('div');
-      helpMenuTitle.style.font = 'bold 24px Arial';
-      helpMenuTitle.innerHTML = '';
-      helpMenu.appendChild(helpMenuTitle);
-
-      const helpMenuTable = document.createElement('table');
-      helpMenuTable.style.width = '100%';
-      helpMenuTable.style.marginTop = '10px';
-      helpMenu.appendChild(helpMenuTable);
-
-      const helpMenuTableBody = document.createElement('tbody');
-      helpMenuTable.appendChild(helpMenuTableBody);
-
-      const helpMenuRow = document.createElement('tr');
-      helpMenuTableBody.appendChild(helpMenuRow);
-
-      const helpMenuActionColumn = document.createElement('td');
-      helpMenuActionColumn.style.width = '50%';
-      helpMenuActionColumn.style.textAlign = 'right';
-      helpMenuActionColumn.style.paddingRight = '10px';
-      helpMenuRow.appendChild(helpMenuActionColumn);
-
-      const helpMenuKeyColumn = document.createElement('td');
-      helpMenuKeyColumn.style.width = '50%';
-      helpMenuKeyColumn.style.textAlign = 'left';
-      helpMenuKeyColumn.style.paddingLeft = '10px';
-      helpMenuRow.appendChild(helpMenuKeyColumn);
-
-      const helpMenuActionText = document.createElement('div');
-      helpMenuActionText.innerHTML = actionInnerHTML;
-      helpMenuActionColumn.appendChild(helpMenuActionText);
-
-      const helpMenuKeyText = document.createElement('div');
-      helpMenuKeyText.innerHTML = keyInnerHTML;
-      helpMenuKeyColumn.appendChild(helpMenuKeyText);
-
-      // Close buttom in the top.
-      const helpMenuCloseButton = document.createElement('button');
-      helpMenuCloseButton.innerHTML = 'Close';
-      helpMenuCloseButton.style.position = 'absolute';
-      helpMenuCloseButton.style.top = '10px';
-      helpMenuCloseButton.style.right = '10px';
-      helpMenuCloseButton.style.zIndex = '1001';
-      helpMenuCloseButton.onclick = () => {
-        helpMenu.remove();
-      };
-      helpMenu.appendChild(helpMenuCloseButton);
-
-      document.body.appendChild(helpMenu);
-    } else {
-      document.body.removeChild(document.body.lastChild);
-    }
-  }
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'F1') {
-      parentContext.params.help = !parentContext.params.help;
-      displayHelpMenu();
-      event.preventDefault();
-    }
-  });
-  keyInnerHTML += 'F1<br>';
-  actionInnerHTML += 'Help<br>';
 
   let simulationFolder = parentContext.gui.addFolder("Simulation");
 
@@ -159,21 +106,6 @@ export function setupGUI(parentContext) {
       event.preventDefault();
     }
   });
-  actionInnerHTML += 'Play / Pause<br>';
-  keyInnerHTML += 'Space<br>';
-
-  // Add reload model button.
-  // Parameters:
-  //  Under "Simulation" folder.
-  //  Name: "Reload".
-  //  When pressed, calls the reload function.
-  //  Can also be triggered by pressing ctrl + L.
-  simulationFolder.add({reload: () => { reload(); }}, 'reload').name('Reload');
-  document.addEventListener('keydown', (event) => {
-    if (event.ctrlKey && event.code === 'KeyL') { reload();  event.preventDefault(); }});
-  actionInnerHTML += 'Reload XML<br>';
-  keyInnerHTML += 'Ctrl L<br>';
-
   // Add reset simulation button.
   // Parameters:
   //  Under "Simulation" folder.
@@ -182,83 +114,45 @@ export function setupGUI(parentContext) {
   //  Can also be triggered by pressing backspace.
   const resetSimulation = () => {
     parentContext.mujoco.mj_resetData(parentContext.model, parentContext.data);
+    if (typeof parentContext.resetCourseProgress === "function") {
+      parentContext.resetCourseProgress();
+    }
+    if (typeof parentContext.applyTerrainMode === "function") {
+      parentContext.applyTerrainMode();
+    }
     parentContext.mujoco.mj_forward(parentContext.model, parentContext.data);
+    if (parentContext.implicitPolicy) {
+      parentContext.implicitPolicy.reset({ immediatePolicy: true });
+    }
   };
   simulationFolder.add({reset: () => { resetSimulation(); }}, 'reset').name('Reset');
   document.addEventListener('keydown', (event) => {
     if (event.code === 'Backspace') { resetSimulation(); event.preventDefault(); }});
-  actionInnerHTML += 'Reset simulation<br>';
-  keyInnerHTML += 'Backspace<br>';
 
-  // Add keyframe slider.
-  let nkeys = parentContext.model.nkey;
-  let keyframeGUI = simulationFolder.add(parentContext.params, "keyframeNumber", 0, nkeys - 1, 1).name('Load Keyframe').listen();
-  keyframeGUI.onChange((value) => {
-    if (value < parentContext.model.nkey) {
-      parentContext.data.qpos.set(parentContext.model.key_qpos.slice(
-        value * parentContext.model.nq, (value + 1) * parentContext.model.nq)); }});
-  parentContext.updateGUICallbacks.push((model, data, params) => {
-    let nkeys = parentContext.model.nkey;
-    console.log("new model loaded. has " + nkeys + " keyframes.");
-    if (nkeys > 0) {
-      keyframeGUI.max(nkeys - 1);
-      keyframeGUI.domElement.style.opacity = 1.0;
-    } else {
-      // Disable keyframe slider if no keyframes are available.
-      keyframeGUI.max(0);
-      keyframeGUI.domElement.style.opacity = 0.5;
+  simulationFolder.add(parentContext.params, "terrainMode", {
+    "Flat": "flat",
+    "Stair": "stair",
+  }).name("Terrain").onChange((value) => {
+    if (typeof parentContext.setTerrainMode === "function") {
+      parentContext.setTerrainMode(value);
     }
-  });
-
-  // Add sliders for ctrlnoiserate and ctrlnoisestd; min = 0, max = 2, step = 0.01.
-  simulationFolder.add(parentContext.params, 'ctrlnoiserate', 0.0, 2.0, 0.01).name('Noise rate' );
-  simulationFolder.add(parentContext.params, 'ctrlnoisestd' , 0.0, 2.0, 0.01).name('Noise scale');
-
-  let textDecoder = new TextDecoder("utf-8");
-  let nullChar    = textDecoder.decode(new ArrayBuffer(1));
-
-  // Add actuator sliders.
-  let actuatorFolder = simulationFolder.addFolder("Actuators");
-  const addActuators = (model, data, params) => {
-    let act_range = model.actuator_ctrlrange;
-    let actuatorGUIs = [];
-    for (let i = 0; i < model.nu; i++) {
-      if (!model.actuator_ctrllimited[i]) { continue; }
-      let name = textDecoder.decode(
-        parentContext.model.names.subarray(
-          parentContext.model.name_actuatoradr[i])).split(nullChar)[0];
-
-      parentContext.params[name] = 0.0;
-      let actuatorGUI = actuatorFolder.add(parentContext.params, name, act_range[2 * i], act_range[2 * i + 1], 0.01).name(name).listen();
-      actuatorGUIs.push(actuatorGUI);
-      actuatorGUI.onChange((value) => {
-        data.ctrl[i] = value;
-      });
+  }).listen();
+  simulationFolder.add(parentContext.params, "autoForward").name("Forward 0.5 m/s").onChange(() => {
+    if (typeof parentContext.updateControlHelpOverlay === "function") {
+      parentContext.updateControlHelpOverlay();
     }
-    return actuatorGUIs;
-  };
-  let actuatorGUIs = addActuators(parentContext.model, parentContext.data, parentContext.params);
-  parentContext.updateGUICallbacks.push((model, data, params) => {
-    for (let i = 0; i < actuatorGUIs.length; i++) {
-      actuatorGUIs[i].destroy();
-    }
-    actuatorGUIs = addActuators(model, data, parentContext.params);
-  });
-  actuatorFolder.close();
+  }).listen();
 
   // Add function that resets the camera to the default position.
   // Can be triggered by pressing ctrl + A.
   document.addEventListener('keydown', (event) => {
     if (event.ctrlKey && event.code === 'KeyA') {
-      // TODO: Use free camera parameters from MuJoCo
-      parentContext.camera.position.set(2.0, 1.7, 1.7);
-      parentContext.controls.target.set(0, 0.7, 0);
-      parentContext.controls.update(); 
+      if (typeof parentContext.resetCameraView === "function") {
+        parentContext.resetCameraView();
+      }
       event.preventDefault();
     }
   });
-  actionInnerHTML += 'Reset free camera<br>';
-  keyInnerHTML += 'Ctrl A<br>';
 
   parentContext.gui.open();
 }
@@ -360,9 +254,9 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
         if (!(meshID in meshes)) {
           geometry = new THREE.BufferGeometry();
 
-          let vertex_buffer = model.mesh_vert.subarray(
+          let vertex_buffer = new Float32Array(model.mesh_vert.subarray(
              model.mesh_vertadr[meshID] * 3,
-            (model.mesh_vertadr[meshID]  + model.mesh_vertnum[meshID]) * 3);
+            (model.mesh_vertadr[meshID]  + model.mesh_vertnum[meshID]) * 3));
           for (let v = 0; v < vertex_buffer.length; v+=3){
             //vertex_buffer[v + 0] =  vertex_buffer[v + 0];
             let temp             =  vertex_buffer[v + 1];
@@ -370,9 +264,9 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
             vertex_buffer[v + 2] = -temp;
           }
 
-          let normal_buffer = model.mesh_normal.subarray(
+          let normal_buffer = new Float32Array(model.mesh_normal.subarray(
              model.mesh_normaladr[meshID] * 3,
-            (model.mesh_normaladr[meshID]  + model.mesh_normalnum[meshID]) * 3);
+            (model.mesh_normaladr[meshID]  + model.mesh_normalnum[meshID]) * 3));
           for (let v = 0; v < normal_buffer.length; v+=3){
             //normal_buffer[v + 0] =  normal_buffer[v + 0];
             let temp             =  normal_buffer[v + 1];
@@ -506,7 +400,13 @@ export async function loadSceneFromURL(mujoco, filename, parent) {
 
       let mesh;// = new THREE.Mesh();
       if (type == 0) {
-        mesh = new Reflector( new THREE.PlaneGeometry( 100, 100 ), { clipBias: 0.003, texture: texture } );
+        const groundMaterial = new THREE.MeshPhysicalMaterial({
+          color: new THREE.Color(0.42, 0.48, 0.52),
+          roughness: 0.92,
+          metalness: 0.0,
+          map: texture || createGroundTexture(),
+        });
+        mesh = new THREE.Mesh(new THREE.PlaneGeometry(120, 120), groundMaterial);
         mesh.rotateX( - Math.PI / 2 );
       } else {
         mesh = new THREE.Mesh(geometry, currentMaterial);
@@ -657,7 +557,7 @@ export async function downloadExampleScenesFolder(mujoco) {
     "pongbot_r2/FR_HIP.STL",
     "pongbot_r2/FR_THIGH.STL",
     "pongbot_r2/FR_TIP.STL",
-    "pongbot_r2/Pongbot_R2_no_link_ver2.xml",
+    "pongbot_r2/PONGBOT_R2_V2.xml",
     "pongbot_r2/RL_CALF.STL",
     "pongbot_r2/RL_HIP.STL",
     "pongbot_r2/RL_THIGH.STL",

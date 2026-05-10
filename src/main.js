@@ -4,6 +4,7 @@ import { GUI              } from '../node_modules/three/examples/jsm/libs/lil-gu
 import { OrbitControls    } from '../node_modules/three/examples/jsm/controls/OrbitControls.js';
 import { DragStateManager } from './utils/DragStateManager.js';
 import { setupGUI, downloadExampleScenesFolder, loadSceneFromURL, drawTendonsAndFlex, getPosition, getQuaternion, toMujocoPos, standardNormal } from './mujocoUtils.js';
+import { ImplicitPolicyController } from './implicitPolicyController.js';
 import   load_mujoco        from '../node_modules/mujoco-js/dist/mujoco_wasm.js';
 
 function showStartupError(error) {
@@ -33,7 +34,7 @@ try {
 
 // Set up Emscripten's Virtual File System
 var bootstrapScene = "simple.xml";
-var initialScene = "pongbot_r2/Pongbot_R2_no_link_ver2.xml";
+var initialScene = "pongbot_r2/PONGBOT_R2_V2.xml";
 mujoco.FS.mkdir('/working');
 mujoco.FS.mount(mujoco.MEMFS, { root: '.' }, '/working');
 mujoco.FS.writeFile("/working/" + bootstrapScene, await(await fetch("./assets/scenes/" + bootstrapScene)).text());
@@ -47,25 +48,57 @@ export class MuJoCoDemo {
     this.data  = new mujoco.MjData(this.model);
 
     // Define Random State Variables
-    this.params = { scene: initialScene, paused: false, help: false, ctrlnoiserate: 0.0, ctrlnoisestd: 0.0, keyframeNumber: 0 };
+    this.params = {
+      scene: initialScene,
+      paused: false,
+      help: false,
+      ctrlnoiserate: 0.0,
+      ctrlnoisestd: 0.0,
+      keyframeNumber: 0,
+      cmdX: 0.0,
+      cmdY: 0.0,
+      cmdYaw: 0.0,
+      policyStatus: "loading",
+      terrainMode: "stair",
+      autoForward: true,
+    };
     this.mujoco_time = 0.0;
     this.bodies  = {}, this.lights = {};
     this.tmpVec  = new THREE.Vector3();
     this.tmpQuat = new THREE.Quaternion();
     this.updateGUICallbacks = [];
-    this.pongbotPD = {
-      active: false,
-      startTime: 0.0,
-      duration: 2.0,
-      kp: 500.0,
-      kd: 1.5,
-      // KP_joint in request is interpreted as KN_JOINT in this model.
-      targets: { HR: 0.0, HP: 0.8, KN: -1.5 },
-      channels: [],
-    };
+    this.implicitPolicy = null;
+    this.pressedKeys = new Set();
+    this.terrainGeoms = [];
+    this.terrainBodyIds = new Set();
+    this.appliedTerrainMode = null;
+    this.followBodyId = -1;
+    this.followLastPosition = new THREE.Vector3();
+    this.followInitialized = false;
+    this.stairLabels = [];
+    this.stairLabelPoints = [
+      { text: "STEP 0.10 m", position: new THREE.Vector3(4.1, 1.05, -3.2) },
+      { text: "STEP 0.15 m", position: new THREE.Vector3(10.0, 1.25, -3.2) },
+      { text: "STEP 0.18 m", position: new THREE.Vector3(15.9, 1.40, -3.2) },
+      { text: "STEP 0.20 m", position: new THREE.Vector3(21.8, 1.55, -3.2) },
+    ];
+    this.courseClearEvents = [
+      { id: 1, thresholdX: 6.8, title: "COURSE 1 CLEAR", detail: "0.10 m steps complete" },
+      { id: 2, thresholdX: 12.7, title: "COURSE 2 CLEAR", detail: "0.15 m steps complete" },
+      { id: 3, thresholdX: 18.6, title: "COURSE 3 CLEAR", detail: "0.18 m steps complete" },
+      { id: 4, thresholdX: 24.5, title: "COURSE 4 CLEAR", detail: "0.20 m steps complete" },
+    ];
+    this.clearedCourses = new Set();
+    this.lastPolicyStatus = "";
+    this.startBannerShown = false;
+    this.textDecoder = new TextDecoder("utf-8");
+    this.nullChar = this.textDecoder.decode(new ArrayBuffer(1));
 
     this.container = document.createElement( 'div' );
     document.body.appendChild( this.container );
+    this.createControlHelpOverlay();
+    this.createWalkReadyOverlay();
+    this.createStairLabels();
 
     this.scene = new THREE.Scene();
     this.scene.name = 'scene';
@@ -75,10 +108,11 @@ export class MuJoCoDemo {
     this.camera.position.set(2.0, 1.7, 1.7);
     this.scene.add(this.camera);
 
-    this.scene.background = new THREE.Color(0.15, 0.25, 0.35);
+    this.scene.background = new THREE.Color(0.10, 0.14, 0.18);
     this.scene.fog = new THREE.Fog(this.scene.background, 15, 25.5 );
+    this.createFloorGuide();
 
-    this.ambientLight = new THREE.AmbientLight( 0xffffff, 0.1 * 3.14 );
+    this.ambientLight = new THREE.AmbientLight( 0xffffff, 0.28 * 3.14 );
     this.ambientLight.name = 'AmbientLight';
     this.scene.add( this.ambientLight );
 
@@ -87,7 +121,7 @@ export class MuJoCoDemo {
     this.spotlight.distance = 10000;
     this.spotlight.penumbra = 0.5;
     this.spotlight.castShadow = true; // default false
-    this.spotlight.intensity = this.spotlight.intensity * 3.14 * 10.0;
+    this.spotlight.intensity = this.spotlight.intensity * 3.14 * 15.0;
     this.spotlight.shadow.mapSize.width = 1024; // default
     this.spotlight.shadow.mapSize.height = 1024; // default
     this.spotlight.shadow.camera.near = 0.1; // default
@@ -125,6 +159,8 @@ export class MuJoCoDemo {
     this.controls.update();
 
     window.addEventListener('resize', this.onWindowResize.bind(this));
+    window.addEventListener('keydown', this.onKeyDown.bind(this));
+    window.addEventListener('keyup', this.onKeyUp.bind(this));
     // Initialize the Drag State Manager.
     this.dragStateManager = new DragStateManager(this.scene, this.renderer, this.camera, this.container.parentElement, this.controls);
   }
@@ -136,92 +172,414 @@ export class MuJoCoDemo {
     // Initialize the three.js Scene using the .xml Model in initialScene
     [this.model, this.data, this.bodies, this.lights] =
       await loadSceneFromURL(mujoco, initialScene, this);
-    this.configurePongbotPDChannels();
-    this.startPongbotPDControl();
+    this.configureTerrainModes();
+    this.applyTerrainMode();
+    this.configureCameraFollow();
+    this.resetCameraView();
+    await this.startImplicitPolicyController();
 
     this.gui = new GUI();
     setupGUI(this);
   }
 
-  startPongbotPDControl() {
-    if (!this.pongbotPD.channels.length) {
-      console.warn("Pongbot PD channels were not found in current scene.");
+  async startImplicitPolicyController() {
+    this.implicitPolicy = new ImplicitPolicyController(this);
+    this.implicitPolicy.captureWalkReadyStart();
+    try {
+      await this.implicitPolicy.initialize();
+      this.params.policyStatus = this.implicitPolicy.status;
+    } catch (error) {
+      this.params.policyStatus = "onnx missing";
+      console.error(error);
+      showStartupError(
+        "Implicit ONNX policy failed to load. Place files at:\n" +
+        "assets/policies/implicit/encoder.onnx\n" +
+        "assets/policies/implicit/policy.onnx\n\n" +
+        "If using local ONNX Runtime, also place ort.min.js and wasm files under assets/onnxruntime-web/.\n\n" +
+        String(error && error.stack ? error.stack : error)
+      );
+    }
+  }
+
+  createFloorGuide() {
+    const grid = new THREE.GridHelper(80, 80, 0x4f78a8, 0x263647);
+    grid.name = "Floor Motion Grid";
+    grid.position.y = 0.006;
+    grid.material.opacity = 0.58;
+    grid.material.transparent = true;
+    this.scene.add(grid);
+
+    const centerLineMaterial = new THREE.LineBasicMaterial({ color: 0xffc857, transparent: true, opacity: 0.82 });
+    const centerLineGeometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-40, 0.009, 0),
+      new THREE.Vector3(40, 0.009, 0),
+    ]);
+    const centerLine = new THREE.Line(centerLineGeometry, centerLineMaterial);
+    centerLine.name = "Floor Center Line";
+    this.scene.add(centerLine);
+  }
+
+  onKeyDown(event) {
+    if (event.code === "Digit1") {
+      this.setTerrainMode("flat");
+      event.preventDefault();
       return;
     }
-    this.pongbotPD.active = true;
-    this.pongbotPD.startTime = this.data.time;
-    for (let i = 0; i < this.pongbotPD.channels.length; i++) {
-      const ch = this.pongbotPD.channels[i];
-      ch.startQ = this.data.qpos[ch.qposAdr];
+    if (event.code === "Digit2") {
+      this.setTerrainMode("stair");
+      event.preventDefault();
+      return;
+    }
+    if (event.code === "KeyF") {
+      this.params.autoForward = !this.params.autoForward;
+      this.updateControlHelpOverlay();
+      event.preventDefault();
+      return;
+    }
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyQ", "KeyE"].includes(event.code)) {
+      this.pressedKeys.add(event.code);
+      event.preventDefault();
     }
   }
 
-  configurePongbotPDChannels() {
-    const textDecoder = new TextDecoder("utf-8");
-    const nullChar = textDecoder.decode(new ArrayBuffer(1));
-    const getNameAt = (adr) => textDecoder.decode(this.model.names.subarray(adr)).split(nullChar)[0];
+  onKeyUp(event) {
+    this.pressedKeys.delete(event.code);
+  }
 
-    const findJointIDByName = (name) => {
-      for (let i = 0; i < this.model.njnt; i++) {
-        if (getNameAt(this.model.name_jntadr[i]) === name) { return i; }
-      }
-      return -1;
-    };
-
-    const findActuatorIDByName = (name) => {
-      for (let i = 0; i < this.model.nu; i++) {
-        if (getNameAt(this.model.name_actuatoradr[i]) === name) { return i; }
-      }
-      return -1;
-    };
-
-    const legs = ["FL", "FR", "RL", "RR"];
-    const types = ["HR", "HP", "KN"];
-    this.pongbotPD.channels = [];
-
-    for (let l = 0; l < legs.length; l++) {
-      for (let t = 0; t < types.length; t++) {
-        const type = types[t];
-        const name = legs[l] + "_" + type + "_JOINT";
-        const jointID = findJointIDByName(name);
-        const actuatorID = findActuatorIDByName(name);
-        if (jointID < 0 || actuatorID < 0) { continue; }
-        this.pongbotPD.channels.push({
-          actuatorID: actuatorID,
-          actuatorName: name,
-          qposAdr: this.model.jnt_qposadr[jointID],
-          qvelAdr: this.model.jnt_dofadr[jointID],
-          target: this.pongbotPD.targets[type],
-          startQ: 0.0,
-        });
-      }
+  updateKeyboardCommand() {
+    const manualForward = (this.pressedKeys.has("ArrowUp") || this.pressedKeys.has("KeyW") ? 1 : 0) -
+      (this.pressedKeys.has("ArrowDown") || this.pressedKeys.has("KeyS") ? 1 : 0);
+    const lateral = (this.pressedKeys.has("KeyA") ? 1 : 0) - (this.pressedKeys.has("KeyD") ? 1 : 0);
+    const yaw = (this.pressedKeys.has("ArrowLeft") || this.pressedKeys.has("KeyQ") ? 1 : 0) -
+      (this.pressedKeys.has("ArrowRight") || this.pressedKeys.has("KeyE") ? 1 : 0);
+    this.params.cmdX = manualForward !== 0 ? manualForward * 1.0 : (this.params.autoForward ? 0.5 : 0.0);
+    this.params.cmdY = lateral * 1.0;
+    this.params.cmdYaw = yaw * 1.0;
+    if (this.implicitPolicy) {
+      this.implicitPolicy.setCommand(this.params.cmdX, this.params.cmdY, this.params.cmdYaw);
+      this.params.policyStatus = this.implicitPolicy.status;
     }
   }
 
-  applyPongbotPDControl() {
-    if (!this.pongbotPD.active) { return; }
+  findModelName(adr) {
+    return this.textDecoder.decode(this.model.names.subarray(adr)).split(this.nullChar)[0];
+  }
 
-    const ctrl = this.data.ctrl;
-    const qpos = this.data.qpos;
-    const qvel = this.data.qvel;
-    const actRange = this.model.actuator_ctrlrange;
-    const elapsed = this.data.time - this.pongbotPD.startTime;
-    const tau = Math.max(0.0, Math.min(1.0, elapsed / this.pongbotPD.duration));
-    const blend = 0.5 * (1.0 - Math.cos(Math.PI * tau));
-
-    for (let i = 0; i < this.pongbotPD.channels.length; i++) {
-      const ch = this.pongbotPD.channels[i];
-      const qHome = ch.startQ + (ch.target - ch.startQ) * blend;
-      const qRef = qHome;
-      const q = qpos[ch.qposAdr];
-      const qd = qvel[ch.qvelAdr];
-      let u = this.pongbotPD.kp * (qRef - q) - this.pongbotPD.kd * qd;
-      const uMin = actRange[2 * ch.actuatorID + 0];
-      const uMax = actRange[2 * ch.actuatorID + 1];
-      u = Math.max(uMin, Math.min(uMax, u));
-      ctrl[ch.actuatorID] = u;
-      this.params[ch.actuatorName] = u;
+  findBodyId(name) {
+    if (!this.model) { return -1; }
+    for (let i = 0; i < this.model.nbody; i++) {
+      if (this.findModelName(this.model.name_bodyadr[i]) === name) { return i; }
     }
+    return -1;
+  }
+
+  configureCameraFollow() {
+    this.followBodyId = this.findBodyId("root");
+    if (this.followBodyId < 0 && this.model && this.model.nbody > 1) {
+      this.followBodyId = 1;
+    }
+    this.followInitialized = false;
+  }
+
+  resetCameraView() {
+    if (this.followBodyId < 0 || !this.data || !this.controls) { return; }
+    const current = getPosition(this.data.xpos, this.followBodyId, new THREE.Vector3());
+    if (this.params.terrainMode === "stair") {
+      this.controls.target.copy(current).add(new THREE.Vector3(5.2, 0.45, -2.2));
+      this.camera.position.copy(current).add(new THREE.Vector3(-2.8, 3.0, 4.8));
+    } else {
+      this.controls.target.copy(current).add(new THREE.Vector3(0.0, 0.05, 0.0));
+      this.camera.position.copy(current).add(new THREE.Vector3(2.0, 1.0, 1.7));
+    }
+    this.followLastPosition.copy(current);
+    this.followInitialized = true;
+    this.controls.update();
+  }
+
+  updateCameraFollow() {
+    if (this.followBodyId < 0 || !this.data || !this.controls) { return; }
+    const current = getPosition(this.data.xpos, this.followBodyId, new THREE.Vector3());
+    if (!this.followInitialized) {
+      this.followLastPosition.copy(current);
+      this.followInitialized = true;
+      return;
+    }
+    const delta = current.clone().sub(this.followLastPosition);
+    if (delta.lengthSq() > 0.0) {
+      this.camera.position.add(delta);
+      this.controls.target.add(delta);
+      this.followLastPosition.copy(current);
+    }
+  }
+
+  configureTerrainModes() {
+    this.terrainGeoms = [];
+    this.terrainBodyIds.clear();
+    if (!this.model) { return; }
+
+    for (let g = 0; g < this.model.ngeom; g++) {
+      const bodyId = this.model.geom_bodyid[g];
+      const bodyName = this.findModelName(this.model.name_bodyadr[bodyId]);
+      if (!bodyName.toLowerCase().includes("stairs")) { continue; }
+      this.terrainBodyIds.add(bodyId);
+      this.terrainGeoms.push({
+        geomId: g,
+        bodyId,
+        contype: this.model.geom_contype[g],
+        conaffinity: this.model.geom_conaffinity[g],
+      });
+    }
+  }
+
+  applyTerrainMode() {
+    if (!this.model) { return; }
+    const stairEnabled = this.params.terrainMode === "stair";
+    for (const entry of this.terrainGeoms) {
+      this.model.geom_contype[entry.geomId] = stairEnabled ? entry.contype : 0;
+      this.model.geom_conaffinity[entry.geomId] = stairEnabled ? entry.conaffinity : 0;
+    }
+    for (const bodyId of this.terrainBodyIds) {
+      if (this.bodies[bodyId]) {
+        this.bodies[bodyId].visible = stairEnabled;
+      }
+    }
+    this.appliedTerrainMode = this.params.terrainMode;
+    this.updateControlHelpOverlay();
+  }
+
+  setTerrainMode(mode) {
+    if (mode !== "flat" && mode !== "stair") { return; }
+    const modeChanged = this.appliedTerrainMode !== mode;
+    this.params.terrainMode = mode;
+    this.params.autoForward = mode === "stair";
+    if (this.mujoco && this.model && this.data) {
+      if (modeChanged) {
+        this.mujoco.mj_resetData(this.model, this.data);
+        this.resetCourseProgress();
+      }
+      this.applyTerrainMode();
+      this.mujoco.mj_forward(this.model, this.data);
+      if (modeChanged && this.implicitPolicy) {
+        this.implicitPolicy.reset({ immediatePolicy: true });
+      }
+      if (modeChanged) {
+        this.followInitialized = false;
+        this.resetCameraView();
+      }
+    } else {
+      this.applyTerrainMode();
+    }
+    this.updateControlHelpOverlay();
+    this.updateStairLabels();
+  }
+
+  resetCourseProgress() {
+    this.clearedCourses.clear();
+    this.lastPolicyStatus = "";
+    this.startBannerShown = false;
+  }
+
+  createControlHelpOverlay() {
+    this.helpOverlay = document.createElement("div");
+    this.helpOverlay.style.position = "fixed";
+    this.helpOverlay.style.top = "12px";
+    this.helpOverlay.style.left = "12px";
+    this.helpOverlay.style.width = "280px";
+    this.helpOverlay.style.padding = "12px";
+    this.helpOverlay.style.background = "rgba(12, 16, 22, 0.78)";
+    this.helpOverlay.style.color = "#ffffff";
+    this.helpOverlay.style.font = "13px Inter, Arial, sans-serif";
+    this.helpOverlay.style.lineHeight = "1.35";
+    this.helpOverlay.style.border = "1px solid rgba(255, 255, 255, 0.16)";
+    this.helpOverlay.style.borderRadius = "8px";
+    this.helpOverlay.style.boxShadow = "0 12px 30px rgba(0, 0, 0, 0.24)";
+    this.helpOverlay.style.zIndex = "20";
+    this.helpOverlay.style.pointerEvents = "none";
+    document.body.appendChild(this.helpOverlay);
+    this.updateControlHelpOverlay();
+  }
+
+  updateControlHelpOverlay() {
+    if (!this.helpOverlay) { return; }
+    const isStair = this.params.terrainMode === "stair";
+    const modeLabel = isStair ? "Stair" : "Flat";
+    const cruiseLabel = this.params.autoForward ? "Cruise on" : "Cruise off";
+    const row = (icon, label, keys) => `
+      <div style="display:flex; align-items:center; gap:9px; margin-top:7px;">
+        <div style="width:22px; color:#91d7ff; text-align:center; font-size:15px;">${icon}</div>
+        <div style="flex:1; color:#e9eef5;">${label}</div>
+        <div style="color:#b9c6d8; font-size:12px;">${keys}</div>
+      </div>`;
+    this.helpOverlay.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+        <div style="font-weight:700; font-size:14px; letter-spacing:0;">Controls</div>
+        <div style="padding:3px 8px; border-radius:999px; background:${isStair ? "#4b3820" : "#153b2a"}; color:${isStair ? "#ffd599" : "#a5f2c7"};">
+          ${modeLabel}
+        </div>
+      </div>
+      ${row("◆", "Terrain mode", "1 Flat / 2 Stair")}
+      ${row("▶", cruiseLabel, "F or GUI")}
+      ${row("▲", "Forward / back", "W/S or ↑/↓")}
+      ${row("↔", "Strafe", "A/D")}
+      ${row("↺", "Yaw", "Q/E or ←/→")}
+      ${row("⟲", "Reset", "Backspace")}
+      ${row("Ⅱ", "Pause", "Space")}
+      <div style="height:1px; background:rgba(255,255,255,0.12); margin:10px 0 8px;"></div>
+      <div style="color:#aeb9c8; font-size:12px;">Camera follows the robot automatically. Drag to orbit.</div>`;
+  }
+
+  createWalkReadyOverlay() {
+    this.walkReadyOverlay = document.createElement("div");
+    this.walkReadyOverlay.style.position = "fixed";
+    this.walkReadyOverlay.style.left = "50%";
+    this.walkReadyOverlay.style.top = "22%";
+    this.walkReadyOverlay.style.transform = "translate(-50%, -50%)";
+    this.walkReadyOverlay.style.padding = "14px 22px";
+    this.walkReadyOverlay.style.borderRadius = "10px";
+    this.walkReadyOverlay.style.background = "rgba(8, 12, 18, 0.82)";
+    this.walkReadyOverlay.style.border = "1px solid rgba(105, 210, 255, 0.85)";
+    this.walkReadyOverlay.style.color = "#ffffff";
+    this.walkReadyOverlay.style.font = "13px Arial, sans-serif";
+    this.walkReadyOverlay.style.lineHeight = "1.35";
+    this.walkReadyOverlay.style.textAlign = "center";
+    this.walkReadyOverlay.style.zIndex = "30";
+    this.walkReadyOverlay.style.pointerEvents = "none";
+    this.walkReadyOverlay.style.boxShadow = "0 12px 30px rgba(0, 0, 0, 0.24)";
+    this.walkReadyOverlay.innerHTML = `
+      <div style="font-size:22px; font-weight:800;">WALK READY</div>
+      <div style="font-size:13px; color:#f6d997; margin-top:3px;">Robot is held in the air while joints move to the policy start pose.</div>`;
+    document.body.appendChild(this.walkReadyOverlay);
+    this.updateWalkReadyOverlay();
+  }
+
+  updateWalkReadyOverlay() {
+    if (!this.walkReadyOverlay) { return; }
+    const status = this.implicitPolicy ? this.implicitPolicy.status : this.params.policyStatus;
+    const show = status === "walk-ready" || status === "settling" || status === "loading onnx" || status === "initializing";
+    this.walkReadyOverlay.style.display = show ? "block" : "none";
+    const wasPreparing = this.lastPolicyStatus === "walk-ready" || this.lastPolicyStatus === "settling" ||
+      this.lastPolicyStatus === "loading onnx" || this.lastPolicyStatus === "initializing";
+    if (!this.startBannerShown && wasPreparing && status === "policy") {
+      this.startBannerShown = true;
+      this.showStatusBanner("START!", "Walking policy is now active.", "rgba(165, 242, 199, 0.85)");
+    }
+    this.lastPolicyStatus = status;
+  }
+
+  createStairLabels() {
+    for (const point of this.stairLabelPoints) {
+      const label = document.createElement("div");
+      label.textContent = point.text;
+      label.style.position = "fixed";
+      label.style.padding = "5px 9px";
+      label.style.borderRadius = "999px";
+      label.style.background = "rgba(9, 13, 18, 0.76)";
+      label.style.border = "1px solid rgba(255, 210, 120, 0.75)";
+      label.style.color = "#ffd578";
+      label.style.font = "700 12px Arial, sans-serif";
+      label.style.letterSpacing = "0";
+      label.style.textShadow = "0 1px 2px rgba(0, 0, 0, 0.45)";
+      label.style.transform = "translate(-50%, -50%)";
+      label.style.pointerEvents = "none";
+      label.style.zIndex = "18";
+      document.body.appendChild(label);
+      this.stairLabels.push({ ...point, element: label });
+    }
+    this.updateStairLabels();
+  }
+
+  updateStairLabels() {
+    if (!this.stairLabels.length || !this.camera) { return; }
+    const visible = this.params.terrainMode === "stair";
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    for (const label of this.stairLabels) {
+      if (!visible) {
+        label.element.style.display = "none";
+        continue;
+      }
+      const projected = label.position.clone().project(this.camera);
+      const inFront = projected.z > -1 && projected.z < 1;
+      label.element.style.display = inFront ? "block" : "none";
+      label.element.style.left = `${(projected.x * 0.5 + 0.5) * width}px`;
+      label.element.style.top = `${(-projected.y * 0.5 + 0.5) * height}px`;
+    }
+  }
+
+  checkCourseClearEffects() {
+    if (this.params.terrainMode !== "stair" || this.followBodyId < 0 || !this.data) { return; }
+    const rootX = this.data.xpos[this.followBodyId * 3 + 0];
+    for (const event of this.courseClearEvents) {
+      if (this.clearedCourses.has(event.id) || rootX < event.thresholdX) { continue; }
+      this.clearedCourses.add(event.id);
+      this.showCourseClearEffect(event);
+    }
+  }
+
+  showCourseClearEffect(event) {
+    this.showStatusBanner(event.title, event.detail, "rgba(255, 213, 120, 0.85)", true);
+  }
+
+  showStatusBanner(title, detail, borderColor, withParticles = false) {
+    const banner = document.createElement("div");
+    banner.innerHTML = `
+      <div style="font-size:22px; font-weight:800;">${title}</div>
+      <div style="font-size:13px; color:#f6d997; margin-top:3px;">${detail}</div>`;
+    banner.style.position = "fixed";
+    banner.style.left = "50%";
+    banner.style.top = "22%";
+    banner.style.transform = "translate(-50%, -50%) scale(0.92)";
+    banner.style.padding = "14px 22px";
+    banner.style.borderRadius = "10px";
+    banner.style.background = "rgba(8, 12, 18, 0.82)";
+    banner.style.border = `1px solid ${borderColor}`;
+    banner.style.color = "#ffffff";
+    banner.style.textAlign = "center";
+    banner.style.zIndex = "30";
+    banner.style.pointerEvents = "none";
+    banner.style.opacity = "0";
+    banner.style.transition = "opacity 180ms ease, transform 180ms ease";
+    document.body.appendChild(banner);
+    requestAnimationFrame(() => {
+      banner.style.opacity = "1";
+      banner.style.transform = "translate(-50%, -50%) scale(1)";
+    });
+    setTimeout(() => {
+      banner.style.opacity = "0";
+      banner.style.transform = "translate(-50%, -55%) scale(0.96)";
+    }, 1150);
+    setTimeout(() => banner.remove(), 1500);
+
+    if (!withParticles) { return; }
+    const colors = ["#ffd578", "#69d2ff", "#9cf2b6", "#ff8f70"];
+    for (let i = 0; i < 22; i++) {
+      const particle = document.createElement("div");
+      const angle = (Math.PI * 2 * i) / 22;
+      const distance = 55 + Math.random() * 70;
+      particle.style.position = "fixed";
+      particle.style.left = "50%";
+      particle.style.top = "22%";
+      particle.style.width = "7px";
+      particle.style.height = "7px";
+      particle.style.borderRadius = "50%";
+      particle.style.background = colors[i % colors.length];
+      particle.style.zIndex = "29";
+      particle.style.pointerEvents = "none";
+      particle.style.opacity = "0.95";
+      particle.style.transition = "transform 850ms ease-out, opacity 850ms ease-out";
+      document.body.appendChild(particle);
+      requestAnimationFrame(() => {
+        particle.style.transform = `translate(${Math.cos(angle) * distance}px, ${Math.sin(angle) * distance}px)`;
+        particle.style.opacity = "0";
+      });
+      setTimeout(() => particle.remove(), 900);
+    }
+  }
+
+  stepImplicitPolicyControl() {
+    if (!this.implicitPolicy) { return; }
+    this.implicitPolicy.stepControl();
+    this.params.policyStatus = this.implicitPolicy.status;
   }
 
   onWindowResize() {
@@ -234,6 +592,7 @@ export class MuJoCoDemo {
     this.controls.update();
 
     if (!this.params["paused"]) {
+      this.updateKeyboardCommand();
       let timestep = this.model.opt.timestep;
       if (timeMS - this.mujoco_time > 35.0) { this.mujoco_time = timeMS; }
       while (this.mujoco_time < timeMS) {
@@ -249,7 +608,7 @@ export class MuJoCoDemo {
           }
         }
 
-        this.applyPongbotPDControl();
+        this.stepImplicitPolicyControl();
 
         // Clear old perturbations, apply new ones.
         for (let i = 0; i < this.data.qfrc_applied.length; i++) { this.data.qfrc_applied[i] = 0.0; }
@@ -328,6 +687,12 @@ export class MuJoCoDemo {
 
     // Draw Tendons and Flex verts
     drawTendonsAndFlex(this.mujocoRoot, this.model, this.data);
+
+    this.updateCameraFollow();
+    this.controls.update();
+    this.updateStairLabels();
+    this.updateWalkReadyOverlay();
+    this.checkCourseClearEffects();
 
     // Render!
     this.renderer.render( this.scene, this.camera );

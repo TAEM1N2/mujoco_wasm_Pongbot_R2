@@ -13592,6 +13592,58 @@ function checkIntersection(object, raycaster, ray, thresholdSq, a2, b, i2) {
     object
   };
 }
+var _start = /* @__PURE__ */ new Vector3();
+var _end = /* @__PURE__ */ new Vector3();
+var LineSegments = class extends Line {
+  /**
+   * Constructs a new line segments.
+   *
+   * @param {BufferGeometry} [geometry] - The line geometry.
+   * @param {Material|Array<Material>} [material] - The line material.
+   */
+  constructor(geometry, material) {
+    super(geometry, material);
+    this.isLineSegments = true;
+    this.type = "LineSegments";
+  }
+  computeLineDistances() {
+    const geometry = this.geometry;
+    if (geometry.index === null) {
+      const positionAttribute = geometry.attributes.position;
+      const lineDistances = [];
+      for (let i2 = 0, l2 = positionAttribute.count; i2 < l2; i2 += 2) {
+        _start.fromBufferAttribute(positionAttribute, i2);
+        _end.fromBufferAttribute(positionAttribute, i2 + 1);
+        lineDistances[i2] = i2 === 0 ? 0 : lineDistances[i2 - 1];
+        lineDistances[i2 + 1] = lineDistances[i2] + _start.distanceTo(_end);
+      }
+      geometry.setAttribute("lineDistance", new Float32BufferAttribute(lineDistances, 1));
+    } else {
+      warn("LineSegments.computeLineDistances(): Computation only possible with non-indexed BufferGeometry.");
+    }
+    return this;
+  }
+};
+var CanvasTexture = class extends Texture {
+  /**
+   * Constructs a new texture.
+   *
+   * @param {HTMLCanvasElement} [canvas] - The HTML canvas element.
+   * @param {number} [mapping=Texture.DEFAULT_MAPPING] - The texture mapping.
+   * @param {number} [wrapS=ClampToEdgeWrapping] - The wrapS value.
+   * @param {number} [wrapT=ClampToEdgeWrapping] - The wrapT value.
+   * @param {number} [magFilter=LinearFilter] - The mag filter value.
+   * @param {number} [minFilter=LinearMipmapLinearFilter] - The min filter value.
+   * @param {number} [format=RGBAFormat] - The texture format.
+   * @param {number} [type=UnsignedByteType] - The texture type.
+   * @param {number} [anisotropy=Texture.DEFAULT_ANISOTROPY] - The anisotropy value.
+   */
+  constructor(canvas, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy) {
+    super(canvas, mapping, wrapS, wrapT, magFilter, minFilter, format, type, anisotropy);
+    this.isCanvasTexture = true;
+    this.needsUpdate = true;
+  }
+};
 var DepthTexture = class extends Texture {
   /**
    * Constructs a new depth texture.
@@ -16729,6 +16781,51 @@ var Spherical = class {
    */
   clone() {
     return new this.constructor().copy(this);
+  }
+};
+var GridHelper = class extends LineSegments {
+  /**
+   * Constructs a new grid helper.
+   *
+   * @param {number} [size=10] - The size of the grid.
+   * @param {number} [divisions=10] - The number of divisions across the grid.
+   * @param {number|Color|string} [color1=0x444444] - The color of the center line.
+   * @param {number|Color|string} [color2=0x888888] - The color of the lines of the grid.
+   */
+  constructor(size = 10, divisions = 10, color1 = 4473924, color2 = 8947848) {
+    color1 = new Color(color1);
+    color2 = new Color(color2);
+    const center = divisions / 2;
+    const step = size / divisions;
+    const halfSize = size / 2;
+    const vertices = [], colors = [];
+    for (let i2 = 0, j = 0, k = -halfSize; i2 <= divisions; i2++, k += step) {
+      vertices.push(-halfSize, 0, k, halfSize, 0, k);
+      vertices.push(k, 0, -halfSize, k, 0, halfSize);
+      const color = i2 === center ? color1 : color2;
+      color.toArray(colors, j);
+      j += 3;
+      color.toArray(colors, j);
+      j += 3;
+      color.toArray(colors, j);
+      j += 3;
+      color.toArray(colors, j);
+      j += 3;
+    }
+    const geometry = new BufferGeometry();
+    geometry.setAttribute("position", new Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute("color", new Float32BufferAttribute(colors, 3));
+    const material = new LineBasicMaterial({ vertexColors: true, toneMapped: false });
+    super(geometry, material);
+    this.type = "GridHelper";
+  }
+  /**
+   * Frees the GPU-related resources allocated by this instance. Call this
+   * method whenever this instance is no longer used in your app.
+   */
+  dispose() {
+    this.geometry.dispose();
+    this.material.dispose();
   }
 };
 var _axis = /* @__PURE__ */ new Vector3();
@@ -30721,155 +30818,54 @@ var DragStateManager = class {
   }
 };
 
-// src/utils/Reflector.js
-var Reflector = class _Reflector extends Mesh {
-  constructor(geometry, options = {}) {
-    super(geometry);
-    this.isReflector = true;
-    this.type = "Reflector";
-    this.camera = new PerspectiveCamera();
-    const scope = this;
-    const color = options.color !== void 0 ? new Color(options.color) : new Color(8355711);
-    const textureWidth = options.textureWidth || 1024;
-    const textureHeight = options.textureHeight || 1024;
-    const clipBias = options.clipBias || 0;
-    const shader = options.shader || _Reflector.ReflectorShader;
-    const multisample = options.multisample !== void 0 ? options.multisample : 4;
-    const blendTexture = options.texture || void 0;
-    const reflectorPlane = new Plane();
-    const normal = new Vector3();
-    const reflectorWorldPosition = new Vector3();
-    const cameraWorldPosition = new Vector3();
-    const rotationMatrix = new Matrix4();
-    const lookAtPosition = new Vector3(0, 0, -1);
-    const clipPlane = new Vector4();
-    const view = new Vector3();
-    const target = new Vector3();
-    const q = new Vector4();
-    const textureMatrix = new Matrix4();
-    const virtualCamera = this.camera;
-    const renderTarget = new WebGLRenderTarget(textureWidth, textureHeight, { samples: multisample, type: HalfFloatType });
-    this.material = new MeshPhysicalMaterial({ map: blendTexture });
-    this.material.uniforms = {
-      tDiffuse: { value: renderTarget.texture },
-      textureMatrix: { value: textureMatrix }
-    };
-    this.material.onBeforeCompile = (shader2) => {
-      let bodyStart = shader2.vertexShader.indexOf("void main() {");
-      shader2.vertexShader = shader2.vertexShader.slice(0, bodyStart) + "\nuniform mat4 textureMatrix;\nvarying vec4 vUv3;\n" + shader2.vertexShader.slice(bodyStart - 1, -1) + "	vUv3 = textureMatrix * vec4( position, 1.0 ); }";
-      bodyStart = shader2.fragmentShader.indexOf("void main() {");
-      shader2.fragmentShader = //'#define USE_UV\n' +
-      "\nuniform sampler2D tDiffuse; \n varying vec4 vUv3;\n" + shader2.fragmentShader.slice(0, bodyStart) + shader2.fragmentShader.slice(bodyStart - 1, -1) + `	gl_FragColor = vec4( mix( texture2DProj( tDiffuse,  vUv3 ).rgb, gl_FragColor.rgb , 0.5), 1.0 );
-				}`;
-      shader2.uniforms.tDiffuse = { value: renderTarget.texture };
-      shader2.uniforms.textureMatrix = { value: textureMatrix };
-      this.material.uniforms = shader2.uniforms;
-      this.material.userData.shader = shader2;
-    };
-    this.receiveShadow = true;
-    this.onBeforeRender = function(renderer, scene, camera) {
-      reflectorWorldPosition.setFromMatrixPosition(scope.matrixWorld);
-      cameraWorldPosition.setFromMatrixPosition(camera.matrixWorld);
-      rotationMatrix.extractRotation(scope.matrixWorld);
-      normal.set(0, 0, 1);
-      normal.applyMatrix4(rotationMatrix);
-      view.subVectors(reflectorWorldPosition, cameraWorldPosition);
-      if (view.dot(normal) > 0) return;
-      view.reflect(normal).negate();
-      view.add(reflectorWorldPosition);
-      rotationMatrix.extractRotation(camera.matrixWorld);
-      lookAtPosition.set(0, 0, -1);
-      lookAtPosition.applyMatrix4(rotationMatrix);
-      lookAtPosition.add(cameraWorldPosition);
-      target.subVectors(reflectorWorldPosition, lookAtPosition);
-      target.reflect(normal).negate();
-      target.add(reflectorWorldPosition);
-      virtualCamera.position.copy(view);
-      virtualCamera.up.set(0, 1, 0);
-      virtualCamera.up.applyMatrix4(rotationMatrix);
-      virtualCamera.up.reflect(normal);
-      virtualCamera.lookAt(target);
-      virtualCamera.far = camera.far;
-      virtualCamera.updateMatrixWorld();
-      virtualCamera.projectionMatrix.copy(camera.projectionMatrix);
-      textureMatrix.set(
-        0.5,
-        0,
-        0,
-        0.5,
-        0,
-        0.5,
-        0,
-        0.5,
-        0,
-        0,
-        0.5,
-        0.5,
-        0,
-        0,
-        0,
-        1
-      );
-      textureMatrix.multiply(virtualCamera.projectionMatrix);
-      textureMatrix.multiply(virtualCamera.matrixWorldInverse);
-      textureMatrix.multiply(scope.matrixWorld);
-      reflectorPlane.setFromNormalAndCoplanarPoint(normal, reflectorWorldPosition);
-      reflectorPlane.applyMatrix4(virtualCamera.matrixWorldInverse);
-      clipPlane.set(reflectorPlane.normal.x, reflectorPlane.normal.y, reflectorPlane.normal.z, reflectorPlane.constant);
-      const projectionMatrix = virtualCamera.projectionMatrix;
-      q.x = (Math.sign(clipPlane.x) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
-      q.y = (Math.sign(clipPlane.y) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
-      q.z = -1;
-      q.w = (1 + projectionMatrix.elements[10]) / projectionMatrix.elements[14];
-      clipPlane.multiplyScalar(2 / clipPlane.dot(q));
-      projectionMatrix.elements[2] = clipPlane.x;
-      projectionMatrix.elements[6] = clipPlane.y;
-      projectionMatrix.elements[10] = clipPlane.z + 1 - clipBias;
-      projectionMatrix.elements[14] = clipPlane.w;
-      scope.visible = false;
-      const currentRenderTarget = renderer.getRenderTarget();
-      const currentXrEnabled = renderer.xr.enabled;
-      const currentShadowAutoUpdate = renderer.shadowMap.autoUpdate;
-      const currentOutputEncoding = renderer.outputColorSpace;
-      const currentToneMapping = renderer.toneMapping;
-      renderer.xr.enabled = false;
-      renderer.shadowMap.autoUpdate = false;
-      renderer.outputColorSpace = LinearSRGBColorSpace;
-      renderer.toneMapping = NoToneMapping;
-      renderer.setRenderTarget(renderTarget);
-      renderer.state.buffers.depth.setMask(true);
-      if (renderer.autoClear === false) renderer.clear();
-      renderer.render(scene, virtualCamera);
-      renderer.xr.enabled = currentXrEnabled;
-      renderer.shadowMap.autoUpdate = currentShadowAutoUpdate;
-      renderer.outputColorSpace = currentOutputEncoding;
-      renderer.toneMapping = currentToneMapping;
-      renderer.setRenderTarget(currentRenderTarget);
-      const viewport = camera.viewport;
-      if (viewport !== void 0) {
-        renderer.state.viewport(viewport);
-      }
-      scope.visible = true;
-    };
-    this.getRenderTarget = function() {
-      return renderTarget;
-    };
-    this.dispose = function() {
-      renderTarget.dispose();
-      scope.material.dispose();
-    };
-  }
-};
-
 // src/mujocoUtils.js
+function createGroundTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  const colors = ["#394b5c", "#46596a"];
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      ctx.fillStyle = colors[(x + y) % 2];
+      ctx.fillRect(x * 32, y * 32, 32, 32);
+    }
+  }
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.20)";
+  ctx.lineWidth = 1;
+  for (let i2 = 0; i2 <= 8; i2++) {
+    ctx.beginPath();
+    ctx.moveTo(i2 * 32, 0);
+    ctx.lineTo(i2 * 32, 256);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, i2 * 32);
+    ctx.lineTo(256, i2 * 32);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(255, 200, 87, 0.45)";
+  ctx.fillRect(122, 0, 12, 256);
+  const texture = new CanvasTexture(canvas);
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.repeat.set(30, 30);
+  texture.needsUpdate = true;
+  return texture;
+}
 async function reloadFunc() {
   this.scene.remove(this.scene.getObjectByName("MuJoCo Root"));
   [this.model, this.data, this.bodies, this.lights] = await loadSceneFromURL(this.mujoco, this.params.scene, this);
-  if (typeof this.configurePongbotPDChannels === "function") {
-    this.configurePongbotPDChannels();
+  if (typeof this.configureTerrainModes === "function") {
+    this.configureTerrainModes();
   }
-  if (typeof this.startPongbotPDControl === "function") {
-    this.startPongbotPDControl();
+  if (typeof this.applyTerrainMode === "function") {
+    this.applyTerrainMode();
+  }
+  if (typeof this.configureCameraFollow === "function") {
+    this.configureCameraFollow();
+  }
+  if (typeof this.startImplicitPolicyController === "function") {
+    await this.startImplicitPolicyController();
   }
   this.mujoco.mj_forward(this.model, this.data);
   for (let i2 = 0; i2 < this.updateGUICallbacks.length; i2++) {
@@ -30885,81 +30881,8 @@ function setupGUI(parentContext) {
   });
   let reload = reloadFunc.bind(parentContext);
   parentContext.gui.add(parentContext.params, "scene", {
-    "Pongbot R2": "pongbot_r2/Pongbot_R2_no_link_ver2.xml"
+    "Pongbot R2": "pongbot_r2/PONGBOT_R2_V2.xml"
   }).name("Example Scene").onChange(reload);
-  let keyInnerHTML = "";
-  let actionInnerHTML = "";
-  const displayHelpMenu = () => {
-    if (parentContext.params.help) {
-      const helpMenu = document.createElement("div");
-      helpMenu.style.position = "absolute";
-      helpMenu.style.top = "10px";
-      helpMenu.style.left = "10px";
-      helpMenu.style.color = "white";
-      helpMenu.style.font = "normal 18px Arial";
-      helpMenu.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
-      helpMenu.style.padding = "10px";
-      helpMenu.style.borderRadius = "10px";
-      helpMenu.style.display = "flex";
-      helpMenu.style.flexDirection = "column";
-      helpMenu.style.alignItems = "center";
-      helpMenu.style.justifyContent = "center";
-      helpMenu.style.width = "400px";
-      helpMenu.style.height = "400px";
-      helpMenu.style.overflow = "auto";
-      helpMenu.style.zIndex = "1000";
-      const helpMenuTitle = document.createElement("div");
-      helpMenuTitle.style.font = "bold 24px Arial";
-      helpMenuTitle.innerHTML = "";
-      helpMenu.appendChild(helpMenuTitle);
-      const helpMenuTable = document.createElement("table");
-      helpMenuTable.style.width = "100%";
-      helpMenuTable.style.marginTop = "10px";
-      helpMenu.appendChild(helpMenuTable);
-      const helpMenuTableBody = document.createElement("tbody");
-      helpMenuTable.appendChild(helpMenuTableBody);
-      const helpMenuRow = document.createElement("tr");
-      helpMenuTableBody.appendChild(helpMenuRow);
-      const helpMenuActionColumn = document.createElement("td");
-      helpMenuActionColumn.style.width = "50%";
-      helpMenuActionColumn.style.textAlign = "right";
-      helpMenuActionColumn.style.paddingRight = "10px";
-      helpMenuRow.appendChild(helpMenuActionColumn);
-      const helpMenuKeyColumn = document.createElement("td");
-      helpMenuKeyColumn.style.width = "50%";
-      helpMenuKeyColumn.style.textAlign = "left";
-      helpMenuKeyColumn.style.paddingLeft = "10px";
-      helpMenuRow.appendChild(helpMenuKeyColumn);
-      const helpMenuActionText = document.createElement("div");
-      helpMenuActionText.innerHTML = actionInnerHTML;
-      helpMenuActionColumn.appendChild(helpMenuActionText);
-      const helpMenuKeyText = document.createElement("div");
-      helpMenuKeyText.innerHTML = keyInnerHTML;
-      helpMenuKeyColumn.appendChild(helpMenuKeyText);
-      const helpMenuCloseButton = document.createElement("button");
-      helpMenuCloseButton.innerHTML = "Close";
-      helpMenuCloseButton.style.position = "absolute";
-      helpMenuCloseButton.style.top = "10px";
-      helpMenuCloseButton.style.right = "10px";
-      helpMenuCloseButton.style.zIndex = "1001";
-      helpMenuCloseButton.onclick = () => {
-        helpMenu.remove();
-      };
-      helpMenu.appendChild(helpMenuCloseButton);
-      document.body.appendChild(helpMenu);
-    } else {
-      document.body.removeChild(document.body.lastChild);
-    }
-  };
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "F1") {
-      parentContext.params.help = !parentContext.params.help;
-      displayHelpMenu();
-      event.preventDefault();
-    }
-  });
-  keyInnerHTML += "F1<br>";
-  actionInnerHTML += "Help<br>";
   let simulationFolder = parentContext.gui.addFolder("Simulation");
   const pauseSimulation = simulationFolder.add(parentContext.params, "paused").name("Pause Simulation");
   pauseSimulation.onChange((value) => {
@@ -30983,22 +30906,18 @@ function setupGUI(parentContext) {
       event.preventDefault();
     }
   });
-  actionInnerHTML += "Play / Pause<br>";
-  keyInnerHTML += "Space<br>";
-  simulationFolder.add({ reload: () => {
-    reload();
-  } }, "reload").name("Reload");
-  document.addEventListener("keydown", (event) => {
-    if (event.ctrlKey && event.code === "KeyL") {
-      reload();
-      event.preventDefault();
-    }
-  });
-  actionInnerHTML += "Reload XML<br>";
-  keyInnerHTML += "Ctrl L<br>";
   const resetSimulation = () => {
     parentContext.mujoco.mj_resetData(parentContext.model, parentContext.data);
+    if (typeof parentContext.resetCourseProgress === "function") {
+      parentContext.resetCourseProgress();
+    }
+    if (typeof parentContext.applyTerrainMode === "function") {
+      parentContext.applyTerrainMode();
+    }
     parentContext.mujoco.mj_forward(parentContext.model, parentContext.data);
+    if (parentContext.implicitPolicy) {
+      parentContext.implicitPolicy.reset({ immediatePolicy: true });
+    }
   };
   simulationFolder.add({ reset: () => {
     resetSimulation();
@@ -31009,73 +30928,27 @@ function setupGUI(parentContext) {
       event.preventDefault();
     }
   });
-  actionInnerHTML += "Reset simulation<br>";
-  keyInnerHTML += "Backspace<br>";
-  let nkeys = parentContext.model.nkey;
-  let keyframeGUI = simulationFolder.add(parentContext.params, "keyframeNumber", 0, nkeys - 1, 1).name("Load Keyframe").listen();
-  keyframeGUI.onChange((value) => {
-    if (value < parentContext.model.nkey) {
-      parentContext.data.qpos.set(parentContext.model.key_qpos.slice(
-        value * parentContext.model.nq,
-        (value + 1) * parentContext.model.nq
-      ));
+  simulationFolder.add(parentContext.params, "terrainMode", {
+    "Flat": "flat",
+    "Stair": "stair"
+  }).name("Terrain").onChange((value) => {
+    if (typeof parentContext.setTerrainMode === "function") {
+      parentContext.setTerrainMode(value);
     }
-  });
-  parentContext.updateGUICallbacks.push((model, data, params) => {
-    let nkeys2 = parentContext.model.nkey;
-    console.log("new model loaded. has " + nkeys2 + " keyframes.");
-    if (nkeys2 > 0) {
-      keyframeGUI.max(nkeys2 - 1);
-      keyframeGUI.domElement.style.opacity = 1;
-    } else {
-      keyframeGUI.max(0);
-      keyframeGUI.domElement.style.opacity = 0.5;
+  }).listen();
+  simulationFolder.add(parentContext.params, "autoForward").name("Forward 0.5 m/s").onChange(() => {
+    if (typeof parentContext.updateControlHelpOverlay === "function") {
+      parentContext.updateControlHelpOverlay();
     }
-  });
-  simulationFolder.add(parentContext.params, "ctrlnoiserate", 0, 2, 0.01).name("Noise rate");
-  simulationFolder.add(parentContext.params, "ctrlnoisestd", 0, 2, 0.01).name("Noise scale");
-  let textDecoder = new TextDecoder("utf-8");
-  let nullChar = textDecoder.decode(new ArrayBuffer(1));
-  let actuatorFolder = simulationFolder.addFolder("Actuators");
-  const addActuators = (model, data, params) => {
-    let act_range = model.actuator_ctrlrange;
-    let actuatorGUIs2 = [];
-    for (let i2 = 0; i2 < model.nu; i2++) {
-      if (!model.actuator_ctrllimited[i2]) {
-        continue;
-      }
-      let name = textDecoder.decode(
-        parentContext.model.names.subarray(
-          parentContext.model.name_actuatoradr[i2]
-        )
-      ).split(nullChar)[0];
-      parentContext.params[name] = 0;
-      let actuatorGUI = actuatorFolder.add(parentContext.params, name, act_range[2 * i2], act_range[2 * i2 + 1], 0.01).name(name).listen();
-      actuatorGUIs2.push(actuatorGUI);
-      actuatorGUI.onChange((value) => {
-        data.ctrl[i2] = value;
-      });
-    }
-    return actuatorGUIs2;
-  };
-  let actuatorGUIs = addActuators(parentContext.model, parentContext.data, parentContext.params);
-  parentContext.updateGUICallbacks.push((model, data, params) => {
-    for (let i2 = 0; i2 < actuatorGUIs.length; i2++) {
-      actuatorGUIs[i2].destroy();
-    }
-    actuatorGUIs = addActuators(model, data, parentContext.params);
-  });
-  actuatorFolder.close();
+  }).listen();
   document.addEventListener("keydown", (event) => {
     if (event.ctrlKey && event.code === "KeyA") {
-      parentContext.camera.position.set(2, 1.7, 1.7);
-      parentContext.controls.target.set(0, 0.7, 0);
-      parentContext.controls.update();
+      if (typeof parentContext.resetCameraView === "function") {
+        parentContext.resetCameraView();
+      }
       event.preventDefault();
     }
   });
-  actionInnerHTML += "Reset free camera<br>";
-  keyInnerHTML += "Ctrl A<br>";
   parentContext.gui.open();
 }
 async function loadSceneFromURL(mujoco2, filename, parent) {
@@ -31141,19 +31014,19 @@ async function loadSceneFromURL(mujoco2, filename, parent) {
       let meshID = model.geom_dataid[g2];
       if (!(meshID in meshes)) {
         geometry = new BufferGeometry();
-        let vertex_buffer = model.mesh_vert.subarray(
+        let vertex_buffer = new Float32Array(model.mesh_vert.subarray(
           model.mesh_vertadr[meshID] * 3,
           (model.mesh_vertadr[meshID] + model.mesh_vertnum[meshID]) * 3
-        );
+        ));
         for (let v = 0; v < vertex_buffer.length; v += 3) {
           let temp = vertex_buffer[v + 1];
           vertex_buffer[v + 1] = vertex_buffer[v + 2];
           vertex_buffer[v + 2] = -temp;
         }
-        let normal_buffer = model.mesh_normal.subarray(
+        let normal_buffer = new Float32Array(model.mesh_normal.subarray(
           model.mesh_normaladr[meshID] * 3,
           (model.mesh_normaladr[meshID] + model.mesh_normalnum[meshID]) * 3
-        );
+        ));
         for (let v = 0; v < normal_buffer.length; v += 3) {
           let temp = normal_buffer[v + 1];
           normal_buffer[v + 1] = normal_buffer[v + 2];
@@ -31279,7 +31152,13 @@ async function loadSceneFromURL(mujoco2, filename, parent) {
     });
     let mesh;
     if (type == 0) {
-      mesh = new Reflector(new PlaneGeometry(100, 100), { clipBias: 3e-3, texture });
+      const groundMaterial = new MeshPhysicalMaterial({
+        color: new Color(0.42, 0.48, 0.52),
+        roughness: 0.92,
+        metalness: 0,
+        map: texture || createGroundTexture()
+      });
+      mesh = new Mesh(new PlaneGeometry(120, 120), groundMaterial);
       mesh.rotateX(-Math.PI / 2);
     } else {
       mesh = new Mesh(geometry, currentMaterial);
@@ -31428,7 +31307,7 @@ async function downloadExampleScenesFolder(mujoco2) {
     "pongbot_r2/FR_HIP.STL",
     "pongbot_r2/FR_THIGH.STL",
     "pongbot_r2/FR_TIP.STL",
-    "pongbot_r2/Pongbot_R2_no_link_ver2.xml",
+    "pongbot_r2/PONGBOT_R2_V2.xml",
     "pongbot_r2/RL_CALF.STL",
     "pongbot_r2/RL_HIP.STL",
     "pongbot_r2/RL_THIGH.STL",
@@ -31496,6 +31375,474 @@ function toMujocoPos(target) {
 function standardNormal() {
   return Math.sqrt(-2 * Math.log(Math.random())) * Math.cos(2 * Math.PI * Math.random());
 }
+
+// src/onnxRuntimeLoader.js
+var LOCAL_ORT_SCRIPT = "./assets/onnxruntime-web/ort.min.js";
+var CDN_ORT_SCRIPT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js";
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[data-ort-loader="${src}"]`);
+    if (existing) {
+      existing.addEventListener("load", resolve, { once: true });
+      existing.addEventListener("error", reject, { once: true });
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = src;
+    script.async = true;
+    script.dataset.ortLoader = src;
+    script.onload = resolve;
+    script.onerror = () => reject(new Error(`Failed to load ONNX Runtime script: ${src}`));
+    document.head.appendChild(script);
+  });
+}
+async function loadOnnxRuntime() {
+  if (window.ort) {
+    return window.ort;
+  }
+  try {
+    await loadScript(LOCAL_ORT_SCRIPT);
+  } catch (localError) {
+    console.warn(localError);
+    await loadScript(CDN_ORT_SCRIPT);
+  }
+  if (!window.ort) {
+    throw new Error("ONNX Runtime did not expose window.ort.");
+  }
+  window.ort.env.wasm.numThreads = 1;
+  return window.ort;
+}
+
+// src/implicitPolicyController.js
+var POLICY_CONFIG = {
+  encoderPath: "./assets/policies/implicit/encoder.onnx",
+  policyPath: "./assets/policies/implicit/policy.onnx",
+  historyLength: 5,
+  observationSize: 48,
+  commandSize: 3,
+  gaitCommand: [1.5, 0.5, 0.5, 0.05],
+  homeByType: { HR: 0, HP: 0.64, KN: -1.25 },
+  actionScale: 0.25,
+  policyKp: 150,
+  policyKd: 5.5,
+  walkReadyKp: 1e3,
+  walkReadyKd: 10,
+  walkReadyDuration: 3,
+  fixedBaseReleaseTime: 5,
+  autoPolicyStartTime: 6.2,
+  initialBasePos: [0, 0, 0.63],
+  policyDecimation: 5
+};
+var POLICY_JOINT_ORDER = [
+  "FL_HR_JOINT",
+  "FR_HR_JOINT",
+  "RL_HR_JOINT",
+  "RR_HR_JOINT",
+  "FL_HP_JOINT",
+  "FR_HP_JOINT",
+  "RL_HP_JOINT",
+  "RR_HP_JOINT",
+  "FL_KN_JOINT",
+  "FR_KN_JOINT",
+  "RL_KN_JOINT",
+  "RR_KN_JOINT"
+];
+function clamp2(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+function tensorSizeFromDims(dims) {
+  if (!Array.isArray(dims) || dims.length === 0) {
+    return 0;
+  }
+  return dims.reduce((acc, dim) => acc * (typeof dim === "number" && dim > 0 ? dim : 1), 1);
+}
+function getMetadataShape(session, inputName) {
+  const metadata = session.inputMetadata || session.inputMetadata_ || {};
+  const info = metadata[inputName];
+  return info && Array.isArray(info.dimensions) ? info.dimensions : null;
+}
+function inferTensorDims(session, inputName, flatLength) {
+  const shape = getMetadataShape(session, inputName);
+  if (!shape || shape.length === 0) {
+    return [flatLength];
+  }
+  const dims = shape.map((dim, index) => {
+    if (typeof dim === "number" && dim > 0) {
+      return dim;
+    }
+    return index === 0 && shape.length > 1 ? 1 : flatLength;
+  });
+  const total = tensorSizeFromDims(dims);
+  if (total === flatLength) {
+    return dims;
+  }
+  if (shape.length > 1 && tensorSizeFromDims([1, flatLength]) === flatLength) {
+    return [1, flatLength];
+  }
+  return [flatLength];
+}
+function candidateTensorDims(session, inputName, flatLength) {
+  const primary = inferTensorDims(session, inputName, flatLength);
+  const candidates = [primary, [flatLength], [1, flatLength]];
+  const seen = /* @__PURE__ */ new Set();
+  return candidates.filter((dims) => {
+    const key = dims.join("x");
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return tensorSizeFromDims(dims) === flatLength;
+  });
+}
+function quatConjugate(q) {
+  return [q[0], -q[1], -q[2], -q[3]];
+}
+function rotateVectorByQuat(v, q) {
+  const w = q[0], x = q[1], y = q[2], z = q[3];
+  const vx = v[0], vy = v[1], vz = v[2];
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  return [
+    vx + w * tx + (y * tz - z * ty),
+    vy + w * ty + (z * tx - x * tz),
+    vz + w * tz + (x * ty - y * tx)
+  ];
+}
+var ImplicitPolicyController = class {
+  constructor(demo) {
+    this.demo = demo;
+    this.config = POLICY_CONFIG;
+    this.textDecoder = new TextDecoder("utf-8");
+    this.nullChar = this.textDecoder.decode(new ArrayBuffer(1));
+    this.channels = [];
+    this.command = [0, 0, 0];
+    this.previousAction = new Array(12).fill(0);
+    this.encoderOutput = [];
+    this.history = [];
+    this.stepCount = 0;
+    this.policyActionValid = false;
+    this.policyEnabled = false;
+    this.inferencePending = false;
+    this.ready = false;
+    this.loading = false;
+    this.status = "initializing";
+    this.encoderSession = null;
+    this.policySession = null;
+    this.ort = null;
+    this.rootBodyId = -1;
+    this.rootJointId = -1;
+    this.rootQposAdr = -1;
+    this.rootQvelAdr = -1;
+    this.skipStartupSequence = false;
+  }
+  async initialize() {
+    if (this.loading || this.ready) {
+      return;
+    }
+    this.loading = true;
+    this.status = "loading onnx";
+    this.configureModelBindings();
+    this.captureWalkReadyStart();
+    this.seedHistory();
+    this.ort = await loadOnnxRuntime();
+    this.encoderSession = await this.ort.InferenceSession.create(this.config.encoderPath, {
+      executionProviders: ["wasm"]
+    });
+    this.policySession = await this.ort.InferenceSession.create(this.config.policyPath, {
+      executionProviders: ["wasm"]
+    });
+    this.ready = true;
+    this.loading = false;
+    this.status = "walk-ready";
+  }
+  reset(options = {}) {
+    const immediatePolicy = options.immediatePolicy === true;
+    this.policyEnabled = this.ready;
+    this.policyActionValid = false;
+    this.previousAction.fill(0);
+    this.encoderOutput = [];
+    this.stepCount = this.ready ? this.config.policyDecimation : 0;
+    this.configureModelBindings();
+    this.captureWalkReadyStart();
+    this.seedHistory();
+    this.skipStartupSequence = immediatePolicy;
+    this.status = this.ready ? "policy" : this.status;
+  }
+  configureModelBindings() {
+    const model = this.demo.model;
+    if (!model) {
+      return;
+    }
+    this.rootBodyId = this.findBodyId("root");
+    this.rootJointId = this.findJointId("root");
+    if (this.rootJointId < 0) {
+      this.rootJointId = this.findJointId("floating_base");
+    }
+    this.rootQposAdr = this.rootJointId >= 0 ? model.jnt_qposadr[this.rootJointId] : -1;
+    this.rootQvelAdr = this.rootJointId >= 0 ? model.jnt_dofadr[this.rootJointId] : -1;
+    this.channels = POLICY_JOINT_ORDER.map((jointName, policyIndex) => {
+      const jointId = this.findJointId(jointName);
+      const actuatorId = this.findActuatorId(jointName);
+      const type = jointName.includes("_HR_") ? "HR" : jointName.includes("_HP_") ? "HP" : "KN";
+      if (jointId < 0 || actuatorId < 0) {
+        throw new Error(`Missing PongBot joint or actuator: ${jointName}`);
+      }
+      return {
+        policyIndex,
+        jointName,
+        actuatorId,
+        qposAdr: model.jnt_qposadr[jointId],
+        qvelAdr: model.jnt_dofadr[jointId],
+        home: this.config.homeByType[type],
+        startQ: 0
+      };
+    });
+  }
+  captureWalkReadyStart() {
+    const qpos = this.demo.data.qpos;
+    for (const ch of this.channels) {
+      ch.startQ = qpos[ch.qposAdr];
+    }
+  }
+  seedHistory() {
+    if (!this.demo.model || !this.demo.data || !this.channels.length) {
+      return;
+    }
+    const obs = this.buildObservation();
+    this.history = [];
+    for (let i2 = 0; i2 < this.config.historyLength; i2++) {
+      this.history.push(new Float32Array(obs));
+    }
+  }
+  findName(adr) {
+    return this.textDecoder.decode(this.demo.model.names.subarray(adr)).split(this.nullChar)[0];
+  }
+  findJointId(name) {
+    for (let i2 = 0; i2 < this.demo.model.njnt; i2++) {
+      if (this.findName(this.demo.model.name_jntadr[i2]) === name) {
+        return i2;
+      }
+    }
+    return -1;
+  }
+  findActuatorId(name) {
+    for (let i2 = 0; i2 < this.demo.model.nu; i2++) {
+      if (this.findName(this.demo.model.name_actuatoradr[i2]) === name) {
+        return i2;
+      }
+    }
+    return -1;
+  }
+  findBodyId(name) {
+    for (let i2 = 0; i2 < this.demo.model.nbody; i2++) {
+      if (this.findName(this.demo.model.name_bodyadr[i2]) === name) {
+        return i2;
+      }
+    }
+    return -1;
+  }
+  setCommand(x, y, yaw) {
+    this.command[0] = clamp2(x, -1, 1);
+    this.command[1] = clamp2(y, -1, 1);
+    this.command[2] = clamp2(yaw, -1, 1);
+  }
+  fixBaseUntilPolicyStart() {
+    if (this.rootQposAdr < 0 || this.rootQvelAdr < 0) {
+      return;
+    }
+    const qpos = this.demo.data.qpos;
+    const qvel = this.demo.data.qvel;
+    qpos[this.rootQposAdr + 0] = this.config.initialBasePos[0];
+    qpos[this.rootQposAdr + 1] = this.config.initialBasePos[1];
+    qpos[this.rootQposAdr + 2] = this.config.initialBasePos[2];
+    qpos[this.rootQposAdr + 3] = 1;
+    qpos[this.rootQposAdr + 4] = 0;
+    qpos[this.rootQposAdr + 5] = 0;
+    qpos[this.rootQposAdr + 6] = 0;
+    for (let i2 = 0; i2 < 6; i2++) {
+      qvel[this.rootQvelAdr + i2] = 0;
+    }
+  }
+  applyWalkReadyControl() {
+    const data = this.demo.data;
+    const model = this.demo.model;
+    const elapsed = data.time;
+    const tau = clamp2(elapsed / this.config.walkReadyDuration, 0, 1);
+    const blend = 0.5 * (1 - Math.cos(Math.PI * tau));
+    if (data.time < this.config.fixedBaseReleaseTime) {
+      this.fixBaseUntilPolicyStart();
+    }
+    for (const ch of this.channels) {
+      const target = ch.startQ + (ch.home - ch.startQ) * blend;
+      const q = data.qpos[ch.qposAdr];
+      const qd = data.qvel[ch.qvelAdr];
+      let torque = this.config.walkReadyKp * (target - q) - this.config.walkReadyKd * qd;
+      torque = clamp2(torque, model.actuator_ctrlrange[ch.actuatorId * 2], model.actuator_ctrlrange[ch.actuatorId * 2 + 1]);
+      data.ctrl[ch.actuatorId] = torque;
+    }
+  }
+  computeBodyState() {
+    if (this.rootBodyId < 0) {
+      return { lin: [0, 0, 0], ang: [0, 0, 0], gravity: [0, 0, -1] };
+    }
+    const data = this.demo.data;
+    const body = this.rootBodyId;
+    const q = [
+      data.xquat[body * 4 + 0],
+      data.xquat[body * 4 + 1],
+      data.xquat[body * 4 + 2],
+      data.xquat[body * 4 + 3]
+    ];
+    const inv = quatConjugate(q);
+    const worldAng = [data.cvel[body * 6 + 0], data.cvel[body * 6 + 1], data.cvel[body * 6 + 2]];
+    const worldLin = [data.cvel[body * 6 + 3], data.cvel[body * 6 + 4], data.cvel[body * 6 + 5]];
+    return {
+      lin: rotateVectorByQuat(worldLin, inv),
+      ang: rotateVectorByQuat(worldAng, inv),
+      gravity: rotateVectorByQuat([0, 0, -1], inv)
+    };
+  }
+  buildObservation() {
+    const obs = [];
+    const state = this.computeBodyState();
+    obs.push(state.ang[0] * 0.25, state.ang[1] * 0.25, state.ang[2] * 0.25);
+    obs.push(state.gravity[0], state.gravity[1], state.gravity[2]);
+    for (const ch of this.channels) {
+      obs.push(this.demo.data.qpos[ch.qposAdr] - ch.home);
+    }
+    for (const ch of this.channels) {
+      obs.push(this.demo.data.qvel[ch.qvelAdr] * 0.05);
+    }
+    for (let i2 = 0; i2 < this.previousAction.length; i2++) {
+      obs.push(this.previousAction[i2]);
+    }
+    const gaitIndex = this.demo.data.time * this.config.gaitCommand[0] % 1;
+    const gaitAngle = 2 * Math.PI * gaitIndex;
+    obs.push(Math.sin(gaitAngle), Math.cos(gaitAngle));
+    for (const value of this.config.gaitCommand) {
+      obs.push(value);
+    }
+    if (obs.length !== this.config.observationSize) {
+      throw new Error(`Implicit observation size mismatch: ${obs.length}`);
+    }
+    return obs;
+  }
+  flattenHistory() {
+    const flat = new Float32Array(this.config.historyLength * this.config.observationSize);
+    for (let i2 = 0; i2 < this.history.length; i2++) {
+      flat.set(this.history[i2], i2 * this.config.observationSize);
+    }
+    return flat;
+  }
+  async runSession(session, values, extraDims = []) {
+    const inputName = session.inputNames[0];
+    const outputName = session.outputNames[0];
+    const input = values instanceof Float32Array ? values : new Float32Array(values);
+    const dimsList = [];
+    const seen = /* @__PURE__ */ new Set();
+    const addDims = (dims) => {
+      if (!Array.isArray(dims) || tensorSizeFromDims(dims) !== input.length) {
+        return;
+      }
+      const key = dims.join("x");
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      dimsList.push(dims);
+    };
+    for (const dims of extraDims) {
+      addDims(dims);
+    }
+    for (const dims of candidateTensorDims(session, inputName, input.length)) {
+      addDims(dims);
+    }
+    let lastError = null;
+    for (const dims of dimsList) {
+      try {
+        const tensor = new this.ort.Tensor("float32", input, dims);
+        const result = await session.run({ [inputName]: tensor });
+        return Array.from(result[outputName].data);
+      } catch (error2) {
+        lastError = error2;
+      }
+    }
+    throw new Error(
+      `ONNX inference failed for input '${inputName}' length=${input.length} tried_dims=${dimsList.map((dims) => `[${dims.join(",")}]`).join(", ")}: ` + String(lastError && lastError.message ? lastError.message : lastError)
+    );
+  }
+  async computePolicyAction() {
+    const historyInput = this.flattenHistory();
+    this.encoderOutput = await this.runSession(this.encoderSession, historyInput, [
+      [1, this.config.historyLength, this.config.observationSize]
+    ]);
+    const currentObs = this.buildObservation();
+    this.history.shift();
+    this.history.push(new Float32Array(currentObs));
+    const policyInput = new Float32Array(this.encoderOutput.length + currentObs.length + this.command.length);
+    policyInput.set(this.encoderOutput, 0);
+    policyInput.set(currentObs, this.encoderOutput.length);
+    policyInput.set(this.command, this.encoderOutput.length + currentObs.length);
+    const action = await this.runSession(this.policySession, policyInput);
+    if (action.length !== this.channels.length) {
+      throw new Error(`Policy output size mismatch: ${action.length}, expected ${this.channels.length}`);
+    }
+    return action.map((value) => clamp2(value, -10, 10));
+  }
+  applyPolicyAction(action) {
+    const data = this.demo.data;
+    const model = this.demo.model;
+    for (let i2 = 0; i2 < this.channels.length; i2++) {
+      const ch = this.channels[i2];
+      const target = ch.home + this.config.actionScale * action[i2];
+      const q = data.qpos[ch.qposAdr];
+      const qd = data.qvel[ch.qvelAdr];
+      let torque = this.config.policyKp * (target - q) - this.config.policyKd * qd;
+      torque = clamp2(torque, model.actuator_ctrlrange[ch.actuatorId * 2], model.actuator_ctrlrange[ch.actuatorId * 2 + 1]);
+      data.ctrl[ch.actuatorId] = torque;
+    }
+  }
+  stepControl() {
+    if (!this.ready || !this.channels.length) {
+      this.applyWalkReadyControl();
+      return;
+    }
+    if (!this.skipStartupSequence && this.demo.data.time < this.config.autoPolicyStartTime) {
+      this.status = this.demo.data.time < this.config.fixedBaseReleaseTime ? "walk-ready" : "settling";
+      this.applyWalkReadyControl();
+      this.previousAction.fill(0);
+      return;
+    }
+    if (!this.policyEnabled) {
+      this.policyEnabled = true;
+      this.policyActionValid = false;
+      this.inferencePending = false;
+      this.seedHistory();
+      this.status = "policy";
+    }
+    const shouldUpdatePolicy = !this.policyActionValid || this.stepCount % this.config.policyDecimation === 0;
+    if (shouldUpdatePolicy && !this.inferencePending) {
+      this.inferencePending = true;
+      this.computePolicyAction().then((action) => {
+        this.previousAction = action;
+        this.policyActionValid = true;
+        this.applyPolicyAction(this.previousAction);
+      }).catch((error2) => {
+        this.status = "policy error";
+        this.demo.params.policyStatus = this.status;
+        this.demo.params.paused = true;
+        console.error(error2);
+      }).finally(() => {
+        this.inferencePending = false;
+      });
+    }
+    if (this.policyActionValid) {
+      this.applyPolicyAction(this.previousAction);
+    }
+    this.stepCount += 1;
+  }
+};
 
 // node_modules/mujoco-js/dist/mujoco_wasm.js
 var loadMujoco = /* @__PURE__ */ (() => {
@@ -38454,7 +38801,7 @@ try {
   throw error2;
 }
 var bootstrapScene = "simple.xml";
-var initialScene = "pongbot_r2/Pongbot_R2_no_link_ver2.xml";
+var initialScene = "pongbot_r2/PONGBOT_R2_V2.xml";
 mujoco.FS.mkdir("/working");
 mujoco.FS.mount(mujoco.MEMFS, { root: "." }, "/working");
 mujoco.FS.writeFile("/working/" + bootstrapScene, await (await fetch("./assets/scenes/" + bootstrapScene)).text());
@@ -38463,33 +38810,66 @@ var MuJoCoDemo = class {
     this.mujoco = mujoco;
     this.model = mujoco.MjModel.loadFromXML("/working/" + bootstrapScene);
     this.data = new mujoco.MjData(this.model);
-    this.params = { scene: initialScene, paused: false, help: false, ctrlnoiserate: 0, ctrlnoisestd: 0, keyframeNumber: 0 };
+    this.params = {
+      scene: initialScene,
+      paused: false,
+      help: false,
+      ctrlnoiserate: 0,
+      ctrlnoisestd: 0,
+      keyframeNumber: 0,
+      cmdX: 0,
+      cmdY: 0,
+      cmdYaw: 0,
+      policyStatus: "loading",
+      terrainMode: "stair",
+      autoForward: true
+    };
     this.mujoco_time = 0;
     this.bodies = {}, this.lights = {};
     this.tmpVec = new Vector3();
     this.tmpQuat = new Quaternion();
     this.updateGUICallbacks = [];
-    this.pongbotPD = {
-      active: false,
-      startTime: 0,
-      duration: 2,
-      kp: 500,
-      kd: 1.5,
-      // KP_joint in request is interpreted as KN_JOINT in this model.
-      targets: { HR: 0, HP: 0.8, KN: -1.5 },
-      channels: []
-    };
+    this.implicitPolicy = null;
+    this.pressedKeys = /* @__PURE__ */ new Set();
+    this.terrainGeoms = [];
+    this.terrainBodyIds = /* @__PURE__ */ new Set();
+    this.appliedTerrainMode = null;
+    this.followBodyId = -1;
+    this.followLastPosition = new Vector3();
+    this.followInitialized = false;
+    this.stairLabels = [];
+    this.stairLabelPoints = [
+      { text: "STEP 0.10 m", position: new Vector3(4.1, 1.05, -3.2) },
+      { text: "STEP 0.15 m", position: new Vector3(10, 1.25, -3.2) },
+      { text: "STEP 0.18 m", position: new Vector3(15.9, 1.4, -3.2) },
+      { text: "STEP 0.20 m", position: new Vector3(21.8, 1.55, -3.2) }
+    ];
+    this.courseClearEvents = [
+      { id: 1, thresholdX: 6.8, title: "COURSE 1 CLEAR", detail: "0.10 m steps complete" },
+      { id: 2, thresholdX: 12.7, title: "COURSE 2 CLEAR", detail: "0.15 m steps complete" },
+      { id: 3, thresholdX: 18.6, title: "COURSE 3 CLEAR", detail: "0.18 m steps complete" },
+      { id: 4, thresholdX: 24.5, title: "COURSE 4 CLEAR", detail: "0.20 m steps complete" }
+    ];
+    this.clearedCourses = /* @__PURE__ */ new Set();
+    this.lastPolicyStatus = "";
+    this.startBannerShown = false;
+    this.textDecoder = new TextDecoder("utf-8");
+    this.nullChar = this.textDecoder.decode(new ArrayBuffer(1));
     this.container = document.createElement("div");
     document.body.appendChild(this.container);
+    this.createControlHelpOverlay();
+    this.createWalkReadyOverlay();
+    this.createStairLabels();
     this.scene = new Scene();
     this.scene.name = "scene";
     this.camera = new PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1e-3, 100);
     this.camera.name = "PerspectiveCamera";
     this.camera.position.set(2, 1.7, 1.7);
     this.scene.add(this.camera);
-    this.scene.background = new Color(0.15, 0.25, 0.35);
+    this.scene.background = new Color(0.1, 0.14, 0.18);
     this.scene.fog = new Fog(this.scene.background, 15, 25.5);
-    this.ambientLight = new AmbientLight(16777215, 0.1 * 3.14);
+    this.createFloorGuide();
+    this.ambientLight = new AmbientLight(16777215, 0.28 * 3.14);
     this.ambientLight.name = "AmbientLight";
     this.scene.add(this.ambientLight);
     this.spotlight = new SpotLight();
@@ -38497,7 +38877,7 @@ var MuJoCoDemo = class {
     this.spotlight.distance = 1e4;
     this.spotlight.penumbra = 0.5;
     this.spotlight.castShadow = true;
-    this.spotlight.intensity = this.spotlight.intensity * 3.14 * 10;
+    this.spotlight.intensity = this.spotlight.intensity * 3.14 * 15;
     this.spotlight.shadow.mapSize.width = 1024;
     this.spotlight.shadow.mapSize.height = 1024;
     this.spotlight.shadow.camera.near = 0.1;
@@ -38527,95 +38907,416 @@ var MuJoCoDemo = class {
     this.controls.screenSpacePanning = true;
     this.controls.update();
     window.addEventListener("resize", this.onWindowResize.bind(this));
+    window.addEventListener("keydown", this.onKeyDown.bind(this));
+    window.addEventListener("keyup", this.onKeyUp.bind(this));
     this.dragStateManager = new DragStateManager(this.scene, this.renderer, this.camera, this.container.parentElement, this.controls);
   }
   async init() {
     await downloadExampleScenesFolder(mujoco);
     [this.model, this.data, this.bodies, this.lights] = await loadSceneFromURL(mujoco, initialScene, this);
-    this.configurePongbotPDChannels();
-    this.startPongbotPDControl();
+    this.configureTerrainModes();
+    this.applyTerrainMode();
+    this.configureCameraFollow();
+    this.resetCameraView();
+    await this.startImplicitPolicyController();
     this.gui = new g();
     setupGUI(this);
   }
-  startPongbotPDControl() {
-    if (!this.pongbotPD.channels.length) {
-      console.warn("Pongbot PD channels were not found in current scene.");
-      return;
-    }
-    this.pongbotPD.active = true;
-    this.pongbotPD.startTime = this.data.time;
-    for (let i2 = 0; i2 < this.pongbotPD.channels.length; i2++) {
-      const ch = this.pongbotPD.channels[i2];
-      ch.startQ = this.data.qpos[ch.qposAdr];
-    }
-  }
-  configurePongbotPDChannels() {
-    const textDecoder = new TextDecoder("utf-8");
-    const nullChar = textDecoder.decode(new ArrayBuffer(1));
-    const getNameAt = (adr) => textDecoder.decode(this.model.names.subarray(adr)).split(nullChar)[0];
-    const findJointIDByName = (name) => {
-      for (let i2 = 0; i2 < this.model.njnt; i2++) {
-        if (getNameAt(this.model.name_jntadr[i2]) === name) {
-          return i2;
-        }
-      }
-      return -1;
-    };
-    const findActuatorIDByName = (name) => {
-      for (let i2 = 0; i2 < this.model.nu; i2++) {
-        if (getNameAt(this.model.name_actuatoradr[i2]) === name) {
-          return i2;
-        }
-      }
-      return -1;
-    };
-    const legs = ["FL", "FR", "RL", "RR"];
-    const types = ["HR", "HP", "KN"];
-    this.pongbotPD.channels = [];
-    for (let l2 = 0; l2 < legs.length; l2++) {
-      for (let t2 = 0; t2 < types.length; t2++) {
-        const type = types[t2];
-        const name = legs[l2] + "_" + type + "_JOINT";
-        const jointID = findJointIDByName(name);
-        const actuatorID = findActuatorIDByName(name);
-        if (jointID < 0 || actuatorID < 0) {
-          continue;
-        }
-        this.pongbotPD.channels.push({
-          actuatorID,
-          actuatorName: name,
-          qposAdr: this.model.jnt_qposadr[jointID],
-          qvelAdr: this.model.jnt_dofadr[jointID],
-          target: this.pongbotPD.targets[type],
-          startQ: 0
-        });
-      }
+  async startImplicitPolicyController() {
+    this.implicitPolicy = new ImplicitPolicyController(this);
+    this.implicitPolicy.captureWalkReadyStart();
+    try {
+      await this.implicitPolicy.initialize();
+      this.params.policyStatus = this.implicitPolicy.status;
+    } catch (error2) {
+      this.params.policyStatus = "onnx missing";
+      console.error(error2);
+      showStartupError(
+        "Implicit ONNX policy failed to load. Place files at:\nassets/policies/implicit/encoder.onnx\nassets/policies/implicit/policy.onnx\n\nIf using local ONNX Runtime, also place ort.min.js and wasm files under assets/onnxruntime-web/.\n\n" + String(error2 && error2.stack ? error2.stack : error2)
+      );
     }
   }
-  applyPongbotPDControl() {
-    if (!this.pongbotPD.active) {
+  createFloorGuide() {
+    const grid = new GridHelper(80, 80, 5208232, 2504263);
+    grid.name = "Floor Motion Grid";
+    grid.position.y = 6e-3;
+    grid.material.opacity = 0.58;
+    grid.material.transparent = true;
+    this.scene.add(grid);
+    const centerLineMaterial = new LineBasicMaterial({ color: 16762967, transparent: true, opacity: 0.82 });
+    const centerLineGeometry = new BufferGeometry().setFromPoints([
+      new Vector3(-40, 9e-3, 0),
+      new Vector3(40, 9e-3, 0)
+    ]);
+    const centerLine = new Line(centerLineGeometry, centerLineMaterial);
+    centerLine.name = "Floor Center Line";
+    this.scene.add(centerLine);
+  }
+  onKeyDown(event) {
+    if (event.code === "Digit1") {
+      this.setTerrainMode("flat");
+      event.preventDefault();
       return;
     }
-    const ctrl = this.data.ctrl;
-    const qpos = this.data.qpos;
-    const qvel = this.data.qvel;
-    const actRange = this.model.actuator_ctrlrange;
-    const elapsed = this.data.time - this.pongbotPD.startTime;
-    const tau = Math.max(0, Math.min(1, elapsed / this.pongbotPD.duration));
-    const blend = 0.5 * (1 - Math.cos(Math.PI * tau));
-    for (let i2 = 0; i2 < this.pongbotPD.channels.length; i2++) {
-      const ch = this.pongbotPD.channels[i2];
-      const qHome = ch.startQ + (ch.target - ch.startQ) * blend;
-      const qRef = qHome;
-      const q = qpos[ch.qposAdr];
-      const qd = qvel[ch.qvelAdr];
-      let u2 = this.pongbotPD.kp * (qRef - q) - this.pongbotPD.kd * qd;
-      const uMin = actRange[2 * ch.actuatorID + 0];
-      const uMax = actRange[2 * ch.actuatorID + 1];
-      u2 = Math.max(uMin, Math.min(uMax, u2));
-      ctrl[ch.actuatorID] = u2;
-      this.params[ch.actuatorName] = u2;
+    if (event.code === "Digit2") {
+      this.setTerrainMode("stair");
+      event.preventDefault();
+      return;
     }
+    if (event.code === "KeyF") {
+      this.params.autoForward = !this.params.autoForward;
+      this.updateControlHelpOverlay();
+      event.preventDefault();
+      return;
+    }
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyA", "KeyD", "KeyW", "KeyS", "KeyQ", "KeyE"].includes(event.code)) {
+      this.pressedKeys.add(event.code);
+      event.preventDefault();
+    }
+  }
+  onKeyUp(event) {
+    this.pressedKeys.delete(event.code);
+  }
+  updateKeyboardCommand() {
+    const manualForward = (this.pressedKeys.has("ArrowUp") || this.pressedKeys.has("KeyW") ? 1 : 0) - (this.pressedKeys.has("ArrowDown") || this.pressedKeys.has("KeyS") ? 1 : 0);
+    const lateral = (this.pressedKeys.has("KeyA") ? 1 : 0) - (this.pressedKeys.has("KeyD") ? 1 : 0);
+    const yaw = (this.pressedKeys.has("ArrowLeft") || this.pressedKeys.has("KeyQ") ? 1 : 0) - (this.pressedKeys.has("ArrowRight") || this.pressedKeys.has("KeyE") ? 1 : 0);
+    this.params.cmdX = manualForward !== 0 ? manualForward * 1 : this.params.autoForward ? 0.5 : 0;
+    this.params.cmdY = lateral * 1;
+    this.params.cmdYaw = yaw * 1;
+    if (this.implicitPolicy) {
+      this.implicitPolicy.setCommand(this.params.cmdX, this.params.cmdY, this.params.cmdYaw);
+      this.params.policyStatus = this.implicitPolicy.status;
+    }
+  }
+  findModelName(adr) {
+    return this.textDecoder.decode(this.model.names.subarray(adr)).split(this.nullChar)[0];
+  }
+  findBodyId(name) {
+    if (!this.model) {
+      return -1;
+    }
+    for (let i2 = 0; i2 < this.model.nbody; i2++) {
+      if (this.findModelName(this.model.name_bodyadr[i2]) === name) {
+        return i2;
+      }
+    }
+    return -1;
+  }
+  configureCameraFollow() {
+    this.followBodyId = this.findBodyId("root");
+    if (this.followBodyId < 0 && this.model && this.model.nbody > 1) {
+      this.followBodyId = 1;
+    }
+    this.followInitialized = false;
+  }
+  resetCameraView() {
+    if (this.followBodyId < 0 || !this.data || !this.controls) {
+      return;
+    }
+    const current = getPosition(this.data.xpos, this.followBodyId, new Vector3());
+    if (this.params.terrainMode === "stair") {
+      this.controls.target.copy(current).add(new Vector3(5.2, 0.45, -2.2));
+      this.camera.position.copy(current).add(new Vector3(-2.8, 3, 4.8));
+    } else {
+      this.controls.target.copy(current).add(new Vector3(0, 0.05, 0));
+      this.camera.position.copy(current).add(new Vector3(2, 1, 1.7));
+    }
+    this.followLastPosition.copy(current);
+    this.followInitialized = true;
+    this.controls.update();
+  }
+  updateCameraFollow() {
+    if (this.followBodyId < 0 || !this.data || !this.controls) {
+      return;
+    }
+    const current = getPosition(this.data.xpos, this.followBodyId, new Vector3());
+    if (!this.followInitialized) {
+      this.followLastPosition.copy(current);
+      this.followInitialized = true;
+      return;
+    }
+    const delta = current.clone().sub(this.followLastPosition);
+    if (delta.lengthSq() > 0) {
+      this.camera.position.add(delta);
+      this.controls.target.add(delta);
+      this.followLastPosition.copy(current);
+    }
+  }
+  configureTerrainModes() {
+    this.terrainGeoms = [];
+    this.terrainBodyIds.clear();
+    if (!this.model) {
+      return;
+    }
+    for (let g2 = 0; g2 < this.model.ngeom; g2++) {
+      const bodyId = this.model.geom_bodyid[g2];
+      const bodyName = this.findModelName(this.model.name_bodyadr[bodyId]);
+      if (!bodyName.toLowerCase().includes("stairs")) {
+        continue;
+      }
+      this.terrainBodyIds.add(bodyId);
+      this.terrainGeoms.push({
+        geomId: g2,
+        bodyId,
+        contype: this.model.geom_contype[g2],
+        conaffinity: this.model.geom_conaffinity[g2]
+      });
+    }
+  }
+  applyTerrainMode() {
+    if (!this.model) {
+      return;
+    }
+    const stairEnabled = this.params.terrainMode === "stair";
+    for (const entry of this.terrainGeoms) {
+      this.model.geom_contype[entry.geomId] = stairEnabled ? entry.contype : 0;
+      this.model.geom_conaffinity[entry.geomId] = stairEnabled ? entry.conaffinity : 0;
+    }
+    for (const bodyId of this.terrainBodyIds) {
+      if (this.bodies[bodyId]) {
+        this.bodies[bodyId].visible = stairEnabled;
+      }
+    }
+    this.appliedTerrainMode = this.params.terrainMode;
+    this.updateControlHelpOverlay();
+  }
+  setTerrainMode(mode) {
+    if (mode !== "flat" && mode !== "stair") {
+      return;
+    }
+    const modeChanged = this.appliedTerrainMode !== mode;
+    this.params.terrainMode = mode;
+    this.params.autoForward = mode === "stair";
+    if (this.mujoco && this.model && this.data) {
+      if (modeChanged) {
+        this.mujoco.mj_resetData(this.model, this.data);
+        this.resetCourseProgress();
+      }
+      this.applyTerrainMode();
+      this.mujoco.mj_forward(this.model, this.data);
+      if (modeChanged && this.implicitPolicy) {
+        this.implicitPolicy.reset({ immediatePolicy: true });
+      }
+      if (modeChanged) {
+        this.followInitialized = false;
+        this.resetCameraView();
+      }
+    } else {
+      this.applyTerrainMode();
+    }
+    this.updateControlHelpOverlay();
+    this.updateStairLabels();
+  }
+  resetCourseProgress() {
+    this.clearedCourses.clear();
+    this.lastPolicyStatus = "";
+    this.startBannerShown = false;
+  }
+  createControlHelpOverlay() {
+    this.helpOverlay = document.createElement("div");
+    this.helpOverlay.style.position = "fixed";
+    this.helpOverlay.style.top = "12px";
+    this.helpOverlay.style.left = "12px";
+    this.helpOverlay.style.width = "280px";
+    this.helpOverlay.style.padding = "12px";
+    this.helpOverlay.style.background = "rgba(12, 16, 22, 0.78)";
+    this.helpOverlay.style.color = "#ffffff";
+    this.helpOverlay.style.font = "13px Inter, Arial, sans-serif";
+    this.helpOverlay.style.lineHeight = "1.35";
+    this.helpOverlay.style.border = "1px solid rgba(255, 255, 255, 0.16)";
+    this.helpOverlay.style.borderRadius = "8px";
+    this.helpOverlay.style.boxShadow = "0 12px 30px rgba(0, 0, 0, 0.24)";
+    this.helpOverlay.style.zIndex = "20";
+    this.helpOverlay.style.pointerEvents = "none";
+    document.body.appendChild(this.helpOverlay);
+    this.updateControlHelpOverlay();
+  }
+  updateControlHelpOverlay() {
+    if (!this.helpOverlay) {
+      return;
+    }
+    const isStair = this.params.terrainMode === "stair";
+    const modeLabel = isStair ? "Stair" : "Flat";
+    const cruiseLabel = this.params.autoForward ? "Cruise on" : "Cruise off";
+    const row = (icon, label, keys) => `
+      <div style="display:flex; align-items:center; gap:9px; margin-top:7px;">
+        <div style="width:22px; color:#91d7ff; text-align:center; font-size:15px;">${icon}</div>
+        <div style="flex:1; color:#e9eef5;">${label}</div>
+        <div style="color:#b9c6d8; font-size:12px;">${keys}</div>
+      </div>`;
+    this.helpOverlay.innerHTML = `
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px;">
+        <div style="font-weight:700; font-size:14px; letter-spacing:0;">Controls</div>
+        <div style="padding:3px 8px; border-radius:999px; background:${isStair ? "#4b3820" : "#153b2a"}; color:${isStair ? "#ffd599" : "#a5f2c7"};">
+          ${modeLabel}
+        </div>
+      </div>
+      ${row("\u25C6", "Terrain mode", "1 Flat / 2 Stair")}
+      ${row("\u25B6", cruiseLabel, "F or GUI")}
+      ${row("\u25B2", "Forward / back", "W/S or \u2191/\u2193")}
+      ${row("\u2194", "Strafe", "A/D")}
+      ${row("\u21BA", "Yaw", "Q/E or \u2190/\u2192")}
+      ${row("\u27F2", "Reset", "Backspace")}
+      ${row("\u2161", "Pause", "Space")}
+      <div style="height:1px; background:rgba(255,255,255,0.12); margin:10px 0 8px;"></div>
+      <div style="color:#aeb9c8; font-size:12px;">Camera follows the robot automatically. Drag to orbit.</div>`;
+  }
+  createWalkReadyOverlay() {
+    this.walkReadyOverlay = document.createElement("div");
+    this.walkReadyOverlay.style.position = "fixed";
+    this.walkReadyOverlay.style.left = "50%";
+    this.walkReadyOverlay.style.top = "22%";
+    this.walkReadyOverlay.style.transform = "translate(-50%, -50%)";
+    this.walkReadyOverlay.style.padding = "14px 22px";
+    this.walkReadyOverlay.style.borderRadius = "10px";
+    this.walkReadyOverlay.style.background = "rgba(8, 12, 18, 0.82)";
+    this.walkReadyOverlay.style.border = "1px solid rgba(105, 210, 255, 0.85)";
+    this.walkReadyOverlay.style.color = "#ffffff";
+    this.walkReadyOverlay.style.font = "13px Arial, sans-serif";
+    this.walkReadyOverlay.style.lineHeight = "1.35";
+    this.walkReadyOverlay.style.textAlign = "center";
+    this.walkReadyOverlay.style.zIndex = "30";
+    this.walkReadyOverlay.style.pointerEvents = "none";
+    this.walkReadyOverlay.style.boxShadow = "0 12px 30px rgba(0, 0, 0, 0.24)";
+    this.walkReadyOverlay.innerHTML = `
+      <div style="font-size:22px; font-weight:800;">WALK READY</div>
+      <div style="font-size:13px; color:#f6d997; margin-top:3px;">Robot is held in the air while joints move to the policy start pose.</div>`;
+    document.body.appendChild(this.walkReadyOverlay);
+    this.updateWalkReadyOverlay();
+  }
+  updateWalkReadyOverlay() {
+    if (!this.walkReadyOverlay) {
+      return;
+    }
+    const status = this.implicitPolicy ? this.implicitPolicy.status : this.params.policyStatus;
+    const show = status === "walk-ready" || status === "settling" || status === "loading onnx" || status === "initializing";
+    this.walkReadyOverlay.style.display = show ? "block" : "none";
+    const wasPreparing = this.lastPolicyStatus === "walk-ready" || this.lastPolicyStatus === "settling" || this.lastPolicyStatus === "loading onnx" || this.lastPolicyStatus === "initializing";
+    if (!this.startBannerShown && wasPreparing && status === "policy") {
+      this.startBannerShown = true;
+      this.showStatusBanner("START!", "Walking policy is now active.", "rgba(165, 242, 199, 0.85)");
+    }
+    this.lastPolicyStatus = status;
+  }
+  createStairLabels() {
+    for (const point of this.stairLabelPoints) {
+      const label = document.createElement("div");
+      label.textContent = point.text;
+      label.style.position = "fixed";
+      label.style.padding = "5px 9px";
+      label.style.borderRadius = "999px";
+      label.style.background = "rgba(9, 13, 18, 0.76)";
+      label.style.border = "1px solid rgba(255, 210, 120, 0.75)";
+      label.style.color = "#ffd578";
+      label.style.font = "700 12px Arial, sans-serif";
+      label.style.letterSpacing = "0";
+      label.style.textShadow = "0 1px 2px rgba(0, 0, 0, 0.45)";
+      label.style.transform = "translate(-50%, -50%)";
+      label.style.pointerEvents = "none";
+      label.style.zIndex = "18";
+      document.body.appendChild(label);
+      this.stairLabels.push({ ...point, element: label });
+    }
+    this.updateStairLabels();
+  }
+  updateStairLabels() {
+    if (!this.stairLabels.length || !this.camera) {
+      return;
+    }
+    const visible = this.params.terrainMode === "stair";
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    for (const label of this.stairLabels) {
+      if (!visible) {
+        label.element.style.display = "none";
+        continue;
+      }
+      const projected = label.position.clone().project(this.camera);
+      const inFront = projected.z > -1 && projected.z < 1;
+      label.element.style.display = inFront ? "block" : "none";
+      label.element.style.left = `${(projected.x * 0.5 + 0.5) * width}px`;
+      label.element.style.top = `${(-projected.y * 0.5 + 0.5) * height}px`;
+    }
+  }
+  checkCourseClearEffects() {
+    if (this.params.terrainMode !== "stair" || this.followBodyId < 0 || !this.data) {
+      return;
+    }
+    const rootX = this.data.xpos[this.followBodyId * 3 + 0];
+    for (const event of this.courseClearEvents) {
+      if (this.clearedCourses.has(event.id) || rootX < event.thresholdX) {
+        continue;
+      }
+      this.clearedCourses.add(event.id);
+      this.showCourseClearEffect(event);
+    }
+  }
+  showCourseClearEffect(event) {
+    this.showStatusBanner(event.title, event.detail, "rgba(255, 213, 120, 0.85)", true);
+  }
+  showStatusBanner(title, detail, borderColor, withParticles = false) {
+    const banner = document.createElement("div");
+    banner.innerHTML = `
+      <div style="font-size:22px; font-weight:800;">${title}</div>
+      <div style="font-size:13px; color:#f6d997; margin-top:3px;">${detail}</div>`;
+    banner.style.position = "fixed";
+    banner.style.left = "50%";
+    banner.style.top = "22%";
+    banner.style.transform = "translate(-50%, -50%) scale(0.92)";
+    banner.style.padding = "14px 22px";
+    banner.style.borderRadius = "10px";
+    banner.style.background = "rgba(8, 12, 18, 0.82)";
+    banner.style.border = `1px solid ${borderColor}`;
+    banner.style.color = "#ffffff";
+    banner.style.textAlign = "center";
+    banner.style.zIndex = "30";
+    banner.style.pointerEvents = "none";
+    banner.style.opacity = "0";
+    banner.style.transition = "opacity 180ms ease, transform 180ms ease";
+    document.body.appendChild(banner);
+    requestAnimationFrame(() => {
+      banner.style.opacity = "1";
+      banner.style.transform = "translate(-50%, -50%) scale(1)";
+    });
+    setTimeout(() => {
+      banner.style.opacity = "0";
+      banner.style.transform = "translate(-50%, -55%) scale(0.96)";
+    }, 1150);
+    setTimeout(() => banner.remove(), 1500);
+    if (!withParticles) {
+      return;
+    }
+    const colors = ["#ffd578", "#69d2ff", "#9cf2b6", "#ff8f70"];
+    for (let i2 = 0; i2 < 22; i2++) {
+      const particle = document.createElement("div");
+      const angle = Math.PI * 2 * i2 / 22;
+      const distance = 55 + Math.random() * 70;
+      particle.style.position = "fixed";
+      particle.style.left = "50%";
+      particle.style.top = "22%";
+      particle.style.width = "7px";
+      particle.style.height = "7px";
+      particle.style.borderRadius = "50%";
+      particle.style.background = colors[i2 % colors.length];
+      particle.style.zIndex = "29";
+      particle.style.pointerEvents = "none";
+      particle.style.opacity = "0.95";
+      particle.style.transition = "transform 850ms ease-out, opacity 850ms ease-out";
+      document.body.appendChild(particle);
+      requestAnimationFrame(() => {
+        particle.style.transform = `translate(${Math.cos(angle) * distance}px, ${Math.sin(angle) * distance}px)`;
+        particle.style.opacity = "0";
+      });
+      setTimeout(() => particle.remove(), 900);
+    }
+  }
+  stepImplicitPolicyControl() {
+    if (!this.implicitPolicy) {
+      return;
+    }
+    this.implicitPolicy.stepControl();
+    this.params.policyStatus = this.implicitPolicy.status;
   }
   onWindowResize() {
     this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -38625,6 +39326,7 @@ var MuJoCoDemo = class {
   render(timeMS) {
     this.controls.update();
     if (!this.params["paused"]) {
+      this.updateKeyboardCommand();
       let timestep = this.model.opt.timestep;
       if (timeMS - this.mujoco_time > 35) {
         this.mujoco_time = timeMS;
@@ -38639,7 +39341,7 @@ var MuJoCoDemo = class {
             this.params["Actuator " + i2] = currentCtrl[i2];
           }
         }
-        this.applyPongbotPDControl();
+        this.stepImplicitPolicyControl();
         for (let i2 = 0; i2 < this.data.qfrc_applied.length; i2++) {
           this.data.qfrc_applied[i2] = 0;
         }
@@ -38702,6 +39404,11 @@ var MuJoCoDemo = class {
       }
     }
     drawTendonsAndFlex(this.mujocoRoot, this.model, this.data);
+    this.updateCameraFollow();
+    this.controls.update();
+    this.updateStairLabels();
+    this.updateWalkReadyOverlay();
+    this.checkCourseClearEffects();
     this.renderer.render(this.scene, this.camera);
   }
 };
